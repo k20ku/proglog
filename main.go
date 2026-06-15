@@ -30,6 +30,8 @@ func main() {
 		log.Fatalf("failed to listen port %s: %v", p, err)
 	}
 
+	fmt.Printf("proglog is listening port %s...", p)
+
 	ctx := context.TODO()
 	if err := run(ctx, l); err != nil {
 		log.Fatalf("failed to terminate server: %v", err)
