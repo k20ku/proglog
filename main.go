@@ -10,7 +10,7 @@ import (
 	"github.com/k20ku/proglog/internal/server"
 )
 
-func run(ctx context.Context, l net.Listener) error {
+func run(_ context.Context, l net.Listener) error {
 	srv := server.NewLogServer()
 	if err := srv.Serve(l); err != nil {
 		return fmt.Errorf("failed to run server: %v", err)

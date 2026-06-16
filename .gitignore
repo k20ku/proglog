@@ -22,6 +22,7 @@ profile.cov
 
 # Auto-generated binary files
 tools/*
+gen/*
 
 # Go workspace file
 go.work
