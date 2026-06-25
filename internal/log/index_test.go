@@ -1,7 +1,6 @@
 package log
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"testing"
@@ -23,15 +22,14 @@ func TestIndex(t *testing.T) {
 
 	require.Equal(t, f.Name(), idx.Name())
 
-	fmt.Println(f.Name())
 	entries := []struct {
 		Off uint32
 		Pos uint64
 	}{
 		{Off: 0, Pos: 0},
-		{Off: 1, Pos: 10},
-		{Off: 2, Pos: 12},
-		{Off: 3, Pos: 18},
+		{Off: 1, Pos: 15},
+		{Off: 2, Pos: 31},
+		{Off: 3, Pos: 43},
 	}
 
 	for _, expected := range entries {
