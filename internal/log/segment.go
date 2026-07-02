@@ -22,7 +22,7 @@ type segment struct {
 
 // The log call newSegment when it needs to add a new segment,
 // such as when the current active segment hits its max size.
-//   - If the index is empty, the next record appended to the segment is the first record and its offset is segment's base offset.
+//   - If the index has no entry, the next record appended to the segment is the first record and its offset is segment's base offset.
 //   - If the index has at least one entry, the next record appended under and its offset is at the end of the segment.
 func newSegment(dir string, baseOffset uint64, c Config) (*segment, error) {
 	s := &segment{
@@ -66,6 +66,9 @@ func newSegment(dir string, baseOffset uint64, c Config) (*segment, error) {
 }
 
 // Appends the record to the segment and returns the newly appended record's offset.
+// It returns EOF error with offset 0 if there is no index storage space to write the entry under.
+//
+// WARNING: This implementation does not grant atomicity of writing index and store
 func (s *segment) Append(record *api.Record) (offset uint64, err error) {
 	cur := s.nextOffset
 	record.Offset = cur
@@ -78,15 +81,14 @@ func (s *segment) Append(record *api.Record) (offset uint64, err error) {
 	if err != nil {
 		return 0, fmt.Errorf("segement appends to the store file: %v", err)
 	}
-	// to the index file
+	// after append to the store, then write the entry to the index file
+	// WARNING: If this index write failed while appending store is successful,
+	// waste data that does not have entry remains in the store
 	if err := s.index.Write(
 		// index offsets are relative to the base offset
 		uint32(s.nextOffset-uint64(s.baseOffset)),
 		pos,
 	); err != nil {
-		// if err == io.EOF {
-		// 	return 0, err
-		// }
 		return 0, fmt.Errorf("segment writes to the index file: %w", err)
 	}
 
