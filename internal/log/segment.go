@@ -2,6 +2,7 @@ package log
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path"
 
@@ -68,10 +69,16 @@ func newSegment(dir string, baseOffset uint64, c Config) (*segment, error) {
 // Appends the record to the segment and returns the newly appended record's offset.
 // It returns EOF error with offset 0 if there is no index storage space to write the entry under.
 //
-// WARNING: This implementation does not grant atomicity of writing index and store
+// This implementation grant atomicity of writing index and store
 func (s *segment) Append(record *api.Record) (offset uint64, err error) {
 	cur := s.nextOffset
 	record.Offset = cur
+
+	// if index cannot be writable, we do nothing then returning EOF
+	if s.index.IsFull() {
+		return 0, io.EOF
+	}
+
 	p, err := proto.Marshal(record)
 	if err != nil {
 		return 0, fmt.Errorf("failed: %v", err)
@@ -120,7 +127,8 @@ func (s *segment) Read(off uint64) (*api.Record, error) {
 
 // validate if the segment has reached its max size, or writing too much to the store or index
 func (s *segment) IsMaxed() bool {
-	return s.store.size >= s.config.Segment.MaxStoreBytes ||
+	return s.index.IsFull() ||
+		s.store.size >= s.config.Segment.MaxStoreBytes ||
 		s.index.size >= s.config.Segment.MaxIndexBytes
 }
 

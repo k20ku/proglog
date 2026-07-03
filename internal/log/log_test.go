@@ -38,3 +38,49 @@ func TestNewLog(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestNewLog1(t *testing.T) {
+	dir := t.TempDir()
+
+	c := Config{}
+	c.Segment.MaxStoreBytes = 1024
+	c.Segment.MaxIndexBytes = 36
+
+	l, err := NewLog(dir, c)
+	require.NoError(t, err)
+
+	for i := range 400 {
+		value := fmt.Sprintf("%s%d", "Hello World", i)
+		record := &api.Record{Value: []byte(value)}
+		_, err := l.Append(record)
+		require.NoErrorf(t, err, "writing at %d time", i)
+	}
+	for i := uint64(0); i < 400; i++ {
+		record, err := l.Read(i)
+		require.NoError(t, err)
+		require.Equal(t, string(record.Value), fmt.Sprintf("%s%d", "Hello World", i))
+	}
+}
+
+func TestNewLog2(t *testing.T) {
+	dir := t.TempDir()
+
+	c := Config{}
+	c.Segment.MaxStoreBytes = 1024
+	c.Segment.MaxIndexBytes = 4096
+
+	l, err := NewLog(dir, c)
+	require.NoError(t, err)
+
+	for i := range 400 {
+		value := fmt.Sprintf("%s%d", "Hello World", i)
+		record := &api.Record{Value: []byte(value)}
+		_, err := l.Append(record)
+		require.NoErrorf(t, err, "writing at %d time", i)
+	}
+	for i := uint64(0); i < 400; i++ {
+		record, err := l.Read(i)
+		require.NoError(t, err)
+		require.Equal(t, string(record.Value), fmt.Sprintf("%s%d", "Hello World", i))
+	}
+}

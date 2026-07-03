@@ -1,7 +1,9 @@
 package log
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"sort"
@@ -99,10 +101,29 @@ func (l *Log) Append(record *api.Record) (off uint64, err error) {
 	defer l.mu.Unlock()
 	off, err = l.activeSegment.Append(record)
 	if err != nil {
-		return 0, fmt.Errorf("log failed to append record: %v", err)
+		if errors.Is(err, io.EOF) {
+			// rollback
+			return l.roll(record)
+		} else {
+			// fatal
+			return 0, fmt.Errorf("log failed to append: %v", err)
+		}
 	}
 	if l.activeSegment.IsMaxed() {
 		err = l.newSegment(off + 1)
+	}
+	return off, err
+}
+
+func (l *Log) roll(record *api.Record) (uint64, error) {
+	if err := l.newSegment(l.activeSegment.nextOffset); err != nil {
+		return 0, fmt.Errorf("rolling for append failed: %v", err)
+	}
+	// append to new segment
+	off, err := l.activeSegment.Append(record)
+	if err != nil {
+		// if there is an EOF error, roll dismisses it
+		return 0, fmt.Errorf("append to logSegment failed in rolling: %v", err)
 	}
 	return off, err
 }
