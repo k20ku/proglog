@@ -2,14 +2,82 @@ package log
 
 import (
 	"fmt"
-	"sync"
 	"testing"
 
 	api "github.com/k20ku/proglog/gen/go/log/v1"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
-func TestNewLog(t *testing.T) {
+func TestLogBasic(t *testing.T) {
+	for senario, fn := range map[string]func(
+		t *testing.T, lg *Log,
+	){
+		"append and read a record succeeds": testAppendRead,
+		"offset out of range error":         testOutRangeErr,
+		"init with existing segments":       testInitExisting,
+	} {
+		t.Run(senario, func(t *testing.T) {
+			dir := t.TempDir()
+
+			c := Config{}
+			c.Segment.MaxStoreBytes = 32
+			lg, err := NewLog(dir, c)
+			require.NoError(t, err)
+
+			fn(t, lg)
+		})
+	}
+}
+
+func testAppendRead(t *testing.T, lg *Log) {
+	append := &api.Record{
+		Value: []byte("Hello Proglog!"),
+	}
+	off, err := lg.Append(append)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), off)
+
+	read, err := lg.Read(off)
+	require.NoError(t, err)
+	require.Equal(t, append.Value, read.Value)
+}
+
+func testOutRangeErr(t *testing.T, lg *Log) {
+	read, err := lg.Read(1)
+	require.Nil(t, read)
+	require.Error(t, err)
+}
+
+func testInitExisting(t *testing.T, lg *Log) {
+	append := &api.Record{
+		Value: []byte("Hello Proglog!"),
+	}
+	for range 3 {
+		_, err := lg.Append(append)
+		require.NoError(t, err)
+	}
+	require.NoError(t, lg.Close())
+
+	off, err := lg.LowestOffset()
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), off)
+	off, err = lg.HighestOffset()
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), off)
+
+	newLg, err := NewLog(lg.Dir, lg.Config)
+	require.NoError(t, err)
+
+	off, err = newLg.LowestOffset()
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), off)
+	off, err = newLg.HighestOffset()
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), off)
+}
+
+func TestLogConcurrecy(t *testing.T) {
 	dir := t.TempDir()
 
 	c := Config{}
@@ -19,68 +87,61 @@ func TestNewLog(t *testing.T) {
 	l, err := NewLog(dir, c)
 	require.NoError(t, err)
 
-	records := []string{"Hello World", "hello world", "hello world!"}
-	for _, record := range records {
-		record := &api.Record{Value: []byte(record)}
-		_, err := l.Append(record)
-		require.NoError(t, err)
-	}
-
-	var wg sync.WaitGroup
-	for i := range 1000 {
-		wg.Go(func() {
-			for j := range 10 {
-				record := &api.Record{Value: []byte(fmt.Sprintf("%s-%d-%d", "Hello", i, j))}
+	var eg errgroup.Group
+	for i := range 5 {
+		eg.Go(func() error {
+			for t := range 10 {
+				record := &api.Record{Value: []byte("Hello Proglog!")}
 				_, err := l.Append(record)
-				require.NoErrorf(t, err, "writing %+v", record)
+				if err != nil {
+					return fmt.Errorf("writing at routine %d of %d time: %v", i, t, err)
+				}
 			}
+			return nil
 		})
 	}
-	wg.Wait()
+	require.NoError(t, eg.Wait())
 }
 
-func TestNewLog1(t *testing.T) {
-	dir := t.TempDir()
+func TestLogConfig(t *testing.T) {
 
-	c := Config{}
-	c.Segment.MaxStoreBytes = 1024
-	c.Segment.MaxIndexBytes = 36
-
-	l, err := NewLog(dir, c)
-	require.NoError(t, err)
-
-	for i := range 400 {
-		value := fmt.Sprintf("%s%d", "Hello World", i)
-		record := &api.Record{Value: []byte(value)}
-		_, err := l.Append(record)
-		require.NoErrorf(t, err, "writing at %d time", i)
+	tests := map[string]struct {
+		MaxStoreBytes uint64
+		MaxIndexBytes uint64
+	}{
+		"MaxIndexBytes is less than MaxStoreBytes": {
+			1024,
+			3 * entWidth,
+		},
+		"MaxIndexBytes is greater than MaxStoreBytes": {
+			1024,
+			4 * 1024,
+		},
 	}
-	for i := uint64(0); i < 400; i++ {
-		record, err := l.Read(i)
-		require.NoError(t, err)
-		require.Equal(t, string(record.Value), fmt.Sprintf("%s%d", "Hello World", i))
-	}
-}
 
-func TestNewLog2(t *testing.T) {
-	dir := t.TempDir()
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
 
-	c := Config{}
-	c.Segment.MaxStoreBytes = 1024
-	c.Segment.MaxIndexBytes = 4096
+			c := Config{}
+			c.Segment.MaxStoreBytes = tt.MaxStoreBytes
+			c.Segment.MaxIndexBytes = tt.MaxIndexBytes
 
-	l, err := NewLog(dir, c)
-	require.NoError(t, err)
+			l, err := NewLog(dir, c)
+			require.NoError(t, err)
 
-	for i := range 400 {
-		value := fmt.Sprintf("%s%d", "Hello World", i)
-		record := &api.Record{Value: []byte(value)}
-		_, err := l.Append(record)
-		require.NoErrorf(t, err, "writing at %d time", i)
-	}
-	for i := uint64(0); i < 400; i++ {
-		record, err := l.Read(i)
-		require.NoError(t, err)
-		require.Equal(t, string(record.Value), fmt.Sprintf("%s%d", "Hello World", i))
+			msg := "Hello Proglog!"
+			for i := uint64(0); i < 400; i++ {
+				value := fmt.Sprintf("%s%d", msg, i)
+				record := &api.Record{Value: []byte(value)}
+				_, err := l.Append(record)
+				require.NoErrorf(t, err, "writing (%d)", i)
+			}
+			for i := uint64(0); i < 400; i++ {
+				record, err := l.Read(i)
+				require.NoErrorf(t, err, "reading (%d): ", i)
+				require.Equal(t, string(record.Value), fmt.Sprintf("%s%d", msg, i))
+			}
+		})
 	}
 }

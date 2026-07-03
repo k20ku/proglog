@@ -194,3 +194,26 @@ func (l *Log) Reset() error {
 	}
 	return l.setup()
 }
+
+// we can know the offset range stored in the log.
+//
+// We'll need this information to know
+//   - what node has oldest and newest data
+//   - what node are falling behind and need to repliate
+func (l *Log) LowestOffset() (uint64, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.segments[0].baseOffset, nil
+}
+
+func (l *Log) HighestOffset() (uint64, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	off := l.segments[len(l.segments)-1].nextOffset
+	if off == 0 {
+		return 0, nil
+	}
+	return off - 1, nil
+}
