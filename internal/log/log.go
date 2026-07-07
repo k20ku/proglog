@@ -3,9 +3,9 @@ package log
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,14 +14,18 @@ import (
 	api "github.com/k20ku/proglog/gen/go/log/v1"
 )
 
+var (
+	ErrOffsetOutOfRange = errors.New("offset out of range")
+)
+
 type Log struct {
 	mu sync.RWMutex // Readers > Writers
 
 	Dir    string
 	Config Config
 
-	activeSegment *segment // the active segment to append writes to
-	segments      []*segment
+	activeSegment *segment   // the active segment to append writes to
+	segments      []*segment // all segments orderd in ascending order based upon their baseOffsets.
 }
 
 // Returns the new log with the given config.
@@ -41,51 +45,108 @@ func NewLog(dir string, c Config) (*Log, error) {
 		Config: c,
 	}
 
-	return l, l.setup()
+	if err := l.setup(); err != nil {
+		return nil, fmt.Errorf("failed to setup log: %v", err)
+	}
+
+	return l, nil
 }
 
+// func (l *Log) setup() error {
+//     offsets, err := l.loadBaseOffsets()
+//     if err != nil {
+//         return err
+//     }
+
+//     if err := l.loadSegments(offsets); err != nil {
+//         return err
+//     }
+
+//     if len(l.segments) == 0 {
+//         return l.appendSegment(l.Config.Segment.InitialOffset)
+//     }
+
+//	    l.activeSegment = l.segments[len(l.segments)-1]
+//	    return nil
+//	}
 func (l *Log) setup() error {
-	files, err := os.ReadDir(l.Dir)
+	baseOffsets, err := loadBaseOffsets(l.Dir)
 	if err != nil {
-		return fmt.Errorf("setup log failed reading the dir (%s): %v", l.Dir, err)
+		return err
 	}
-	// fetch baseOffsets from fileNames
-	var baseOffsets []uint64
-	for _, file := range files {
-		offStr := strings.TrimSuffix(
-			file.Name(),
-			path.Ext(file.Name()),
-		)
-		off, _ := strconv.ParseUint(offStr, 10, 0)
-		baseOffsets = append(baseOffsets, off)
-	}
-	// arrange baseOffsets in decreasing order
-	sort.Slice(baseOffsets, func(i, j int) bool {
-		return baseOffsets[i] > baseOffsets[j]
-	})
-	// create baseOffsets
-	for i := 0; i < len(baseOffsets); i++ {
-		if err = l.newSegment(baseOffsets[i]); err != nil {
-			return err
-		}
-		// baseOffset contains dup for index and store so we skip dup
-		i++
+
+	if err := l.buildSegments(baseOffsets); err != nil {
+		return err
 	}
 	// no segment on the disk
+	// bootstrapping
 	if l.segments == nil {
-		if err = l.newSegment(
-			l.Config.Segment.InitialOffset,
-		); err != nil {
+		baseOffset := l.Config.Segment.InitialOffset
+		if err := l.appendSegment(baseOffset); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (l *Log) newSegment(off uint64) error {
-	s, err := newSegment(l.Dir, off, l.Config)
+// Returns all existing segment base offsets in ascending order.
+func loadBaseOffsets(dir string) ([]uint64, error) {
+	files, err := os.ReadDir(dir)
 	if err != nil {
-		return fmt.Errorf("log failed to new segment: %v", err)
+		return nil, fmt.Errorf(
+			"failed to read dir(%s) to load the base offsets: %v",
+			dir, err,
+		)
+	}
+	// fetch baseOffsets from fileNames
+	var baseOffsets []uint64
+	for _, file := range files {
+		fileExt := path.Ext(file.Name())
+		// skip other than .store ext
+		// this is because store is the source of truth
+		if fileExt != ".store" {
+			continue
+		}
+		offStr := strings.TrimSuffix(
+			file.Name(),
+			fileExt,
+		)
+		off, err := strconv.ParseUint(offStr, 10, 0)
+		if err != nil {
+			fmt.Printf("file name %s is invalid, we skip this", file)
+			continue
+		}
+		baseOffsets = append(baseOffsets, off)
+	}
+
+	// ordering baseOffsets in ascending order
+	slices.Sort(baseOffsets)
+
+	return baseOffsets, nil
+}
+
+func (l *Log) buildSegments(baseOffsets []uint64) error {
+	fmt.Println(baseOffsets, ": baseOffsets")
+	// log appends the new segment for each baseOffset
+	for _, baseOffset := range baseOffsets {
+		if err := l.appendSegment(baseOffset); err != nil {
+			return fmt.Errorf(
+				"building segments failed creating new segment: %v", err,
+			)
+		}
+	}
+
+	return nil
+}
+
+// this is not opened method
+// The caller MUST hold ths lock of this Log
+func (l *Log) appendSegment(baseOffset uint64) error {
+	s, err := newSegment(l.Dir, baseOffset, l.Config)
+	if err != nil {
+		return fmt.Errorf(
+			"log failed to new segment (baseOffset: %d): %v",
+			baseOffset, err)
 	}
 	l.segments = append(l.segments, s)
 	l.activeSegment = s
@@ -99,9 +160,13 @@ func (l *Log) newSegment(off uint64) error {
 func (l *Log) Append(record *api.Record) (off uint64, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	fmt.Printf("active=%d next=%d\n",
+		l.activeSegment.baseOffset,
+		l.activeSegment.nextOffset,
+	)
 	off, err = l.activeSegment.Append(record)
 	if err != nil {
-		if errors.Is(err, io.EOF) {
+		if errors.Is(err, errSegmentMaxed) {
 			// rollback
 			return l.roll(record)
 		} else {
@@ -110,19 +175,22 @@ func (l *Log) Append(record *api.Record) (off uint64, err error) {
 		}
 	}
 	if l.activeSegment.IsMaxed() {
-		err = l.newSegment(off + 1)
+		fmt.Println("Active Segments Maxed\n",
+			l.Config.Segment.MaxIndexBytes, l.Config.Segment.MaxStoreBytes,
+		)
+		err = l.appendSegment(off + 1)
 	}
 	return off, err
 }
 
 func (l *Log) roll(record *api.Record) (uint64, error) {
-	if err := l.newSegment(l.activeSegment.nextOffset); err != nil {
+	if err := l.appendSegment(l.activeSegment.nextOffset); err != nil {
 		return 0, fmt.Errorf("rolling for append failed: %v", err)
 	}
 	// append to new segment
 	off, err := l.activeSegment.Append(record)
 	if err != nil {
-		// if there is an EOF error, roll dismisses it
+		// Even if segment returns errSegmentMaxed, we dismisses it
 		return 0, fmt.Errorf("append to logSegment failed in rolling: %v", err)
 	}
 	return off, err
@@ -132,22 +200,42 @@ func (l *Log) Read(off uint64) (*api.Record, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// search for the segment that has offset off
-	var s *segment
-	for _, segment := range l.segments {
-		if segment.baseOffset <= off && off < segment.nextOffset {
-			s = segment
-			break
-		}
+	s, found := l.binarySearch(off)
+	if !found || s == nil {
+		return nil, ErrOffsetOutOfRange
 	}
-	if s == nil || s.nextOffset <= off {
-		return nil, fmt.Errorf("offset out of range: %d", off)
-	}
+
 	record, err := s.Read(off)
 	if err != nil {
 		return nil, fmt.Errorf("Log failed to read offset (%d) failed: %v", off, err)
 	}
 	return record, nil
+}
+
+func (l *Log) binarySearch(off uint64) (s *segment, found bool) {
+	if l.activeSegment.baseOffset <= off && off < l.activeSegment.nextOffset {
+		s = l.activeSegment
+	}
+	// CAUTION: NOT (>=) !
+	// 0   10  20  30  40 (45)
+	// |___|___|___|____|__:
+	// 0   1   2   3    4
+	// len(l.segments) == 5
+	// |   0   :|   10    :|    |   :
+	// | 0 ~ 9 :| 10 ~ 11 :|    |   :
+	// 0   +--> 1   +--->  2    |   :
+
+	// n in [0, len(l.segments))
+	n := sort.Search(len(l.segments), func(i int) bool {
+		return off < l.segments[i].baseOffset // CAUTION: not <=
+	})
+	fmt.Println(n, ": sort.Search")
+	if !(1 <= n) {
+		return nil, false
+	}
+	s = l.segments[n-1]
+
+	return s, true
 }
 
 // Close this Log, iterating over the segment and close them.
@@ -159,8 +247,7 @@ func (l *Log) Close() error {
 		if err := segment.Close(); err != nil {
 			return fmt.Errorf(
 				"Closing log (%v) failed to close the segments at base offset %d: %v",
-				l, segment.baseOffset, err,
-			)
+				l, segment.baseOffset, err)
 		}
 	}
 	return nil

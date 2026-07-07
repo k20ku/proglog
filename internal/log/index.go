@@ -3,8 +3,8 @@
 package log
 
 import (
+	"errors"
 	"fmt"
-	"io"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -14,6 +14,12 @@ var (
 	offWidth uint64 = 4
 	posWidth uint64 = 8
 	entWidth        = offWidth + posWidth // entire width of the one entry
+
+	//write
+	errIndexFulled = errors.New("index is fulled")
+	// read
+	errIndexOutOfRange = errors.New("index offset out of range")
+	errIndexEmpty      = errors.New("index is empty")
 )
 
 type index struct {
@@ -23,6 +29,7 @@ type index struct {
 }
 
 // creates the index of the given file.
+// TODO: windows or darwin compatibility of mmap
 func newIndex(f *os.File, c Config) (*index, error) {
 	idx := &index{
 		file: f,
@@ -72,14 +79,23 @@ func (i *index) Close() error {
 // Takes in (an offset) and returns the associated record's position in the store.
 //
 // The given offset is relative to the segments's base offset;
+//
 //   - -1 is always the offset of the index's last entry.
+//
 //   - 0 is always the offset of the index's first entry.
+//
 //   - 1 is the second entry, and so on.
+//
+//     Read returns a following errors.
+//
+//   - errIndexEmpty if index is empty,
+//
+//   - errIndexOutOfRange if given relative offset is not in this index
 //
 // It uses relative offsets to reduce the size of the indexes by storing offsets as uint32.
 func (i *index) Read(in int64) (out uint32, pos uint64, err error) {
 	if i.size == 0 {
-		return 0, 0, io.EOF
+		return 0, 0, errIndexEmpty
 	}
 	if in == -1 {
 		out = uint32((i.size / entWidth) - 1)
@@ -88,7 +104,7 @@ func (i *index) Read(in int64) (out uint32, pos uint64, err error) {
 	}
 	pos = uint64(out) * entWidth
 	if i.size < pos+entWidth {
-		return 0, 0, io.EOF
+		return 0, 0, errIndexOutOfRange
 	}
 	out = enc.Uint32(i.mmap[pos : pos+offWidth])
 	pos = enc.Uint64(i.mmap[pos+offWidth : pos+entWidth])
@@ -96,13 +112,13 @@ func (i *index) Read(in int64) (out uint32, pos uint64, err error) {
 }
 
 // Appends the given offset and position to the index.
-// If there is no space to write the entry, returns EOF error,
+// If there is no space to write the entry, returns errIndexFulled error,
 // else write the encoded offset and position to the memory-mapped file
 // and then increment the position where the next write will go.
 func (i *index) Write(off uint32, pos uint64) error {
 	// overflow
 	if uint64(len(i.mmap)) < i.size+entWidth {
-		return io.EOF
+		return errIndexFulled
 	}
 	enc.PutUint32(i.mmap[i.size:i.size+offWidth], off)
 	enc.PutUint64(i.mmap[i.size+offWidth:i.size+entWidth], pos)

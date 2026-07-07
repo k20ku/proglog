@@ -1,13 +1,17 @@
 package log
 
 import (
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path"
 
 	api "github.com/k20ku/proglog/gen/go/log/v1"
 	"google.golang.org/protobuf/proto"
+)
+
+var (
+	errSegmentMaxed = errors.New("segment is maxed")
 )
 
 // The segment wraps the index and store to coordinate operations across the two.
@@ -39,20 +43,31 @@ func newSegment(dir string, baseOffset uint64, c Config) (*segment, error) {
 		0644,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("segment failed to open %s: %w", storePath, err)
+		return nil, fmt.Errorf(
+			"segment failed to open %s: %w",
+			storePath, err,
+		)
 	}
 	if s.store, err = newStore(storeFile); err != nil {
-		return nil, fmt.Errorf("segment failed to newStore: %v", err)
+		return nil, fmt.Errorf(
+			"segment failed to newStore: %v",
+			err,
+		)
 	}
 	// index
-	indexPath := path.Join(dir, fmt.Sprintf("%d%s", baseOffset, ".index"))
+	indexPath := path.Join(
+		dir, fmt.Sprintf("%d%s", baseOffset, ".index"),
+	)
 	indexFile, err := os.OpenFile(
 		indexPath,
 		os.O_CREATE|os.O_RDWR|os.O_APPEND,
 		0644,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("segment failed to open %s: %w", indexPath, err)
+		return nil, fmt.Errorf(
+			"segment failed to open %s: %w",
+			indexPath, err,
+		)
 	}
 	if s.index, err = newIndex(indexFile, c); err != nil {
 		return nil, fmt.Errorf("segment failed to newIndex: %v", err)
@@ -67,22 +82,22 @@ func newSegment(dir string, baseOffset uint64, c Config) (*segment, error) {
 }
 
 // Appends the record to the segment and returns the newly appended record's offset.
-// It returns EOF error with offset 0 if there is no index storage space to write the entry under.
-//
-// This implementation grant atomicity of writing index and store
+// It returns errSegmentMaxed error with offset 0
+// if there is no index storage space to write the entry under.
 func (s *segment) Append(record *api.Record) (offset uint64, err error) {
 	cur := s.nextOffset
 	record.Offset = cur
 
-	// if index cannot be writable, we do nothing then returning EOF
+	// if index cannot be writable, we do nothing then returning err
 	if s.index.IsFull() {
-		return 0, io.EOF
+		return 0, errSegmentMaxed
 	}
 
 	p, err := proto.Marshal(record)
 	if err != nil {
 		return 0, fmt.Errorf("failed: %v", err)
 	}
+	fmt.Println(len(p))
 	// appends an entry to the store file
 	_, pos, err := s.store.Append(p)
 	if err != nil {
@@ -96,6 +111,9 @@ func (s *segment) Append(record *api.Record) (offset uint64, err error) {
 		uint32(s.nextOffset-uint64(s.baseOffset)),
 		pos,
 	); err != nil {
+		if errors.Is(err, errIndexFulled) {
+			return 0, errSegmentMaxed
+		}
 		return 0, fmt.Errorf("segment writes to the index file: %w", err)
 	}
 
@@ -111,14 +129,22 @@ func (s *segment) Append(record *api.Record) (offset uint64, err error) {
 //	assert.Equal(r1, r2)
 func (s *segment) Read(off uint64) (*api.Record, error) {
 	// reads the position from the entry
+	// TODO: error handling, this can be throws errSegmentOffsetOutOfRangeErr
 	_, pos, err := s.index.Read(int64(off - s.baseOffset))
 	if err != nil {
-		return nil, fmt.Errorf("segment failed to read the position from the entry: %v", err)
+		return nil, fmt.Errorf(
+			"segment failed to read the position from the entry: %v",
+			err,
+		)
 	}
 	// reads the data from the position
+	// this returns IO err
 	p, err := s.store.Read(pos)
 	if err != nil {
-		return nil, fmt.Errorf("segment failed to read the data at offset: %v", err)
+		return nil, fmt.Errorf(
+			"segment failed to read the data at offset: %v",
+			err,
+		)
 	}
 	record := &api.Record{}
 	err = proto.Unmarshal(p, record)
@@ -128,8 +154,7 @@ func (s *segment) Read(off uint64) (*api.Record, error) {
 // validate if the segment has reached its max size, or writing too much to the store or index
 func (s *segment) IsMaxed() bool {
 	return s.index.IsFull() ||
-		s.store.size >= s.config.Segment.MaxStoreBytes ||
-		s.index.size >= s.config.Segment.MaxIndexBytes
+		s.store.size >= s.config.Segment.MaxStoreBytes
 }
 
 func (s *segment) Remove() error {
@@ -156,7 +181,10 @@ func (s *segment) Close() error {
 	return nil
 }
 
-// returns max( x in ( x < j && x % k == 0 ) ). it is used to make sure we stay under the use's disk capacity. For example, nearestMultiples(j=9, k=4) == 8 because 8 is multiples of 4 and 8 is the maximum greatest one that is <= 9
+// returns max( x in ( x < j && x % k == 0 ) ).
+// it is used to make sure we stay under the use's disk capacity.
+// For example, nearestMultiples(j=9, k=4) == 8,
+// because 8 is multiples of 4 and 8 is the maximum greatest one that is <= 9
 func nearestMultiples(j, k uint64) uint64 {
 	return (j / k) * k
 }

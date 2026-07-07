@@ -24,6 +24,9 @@ profile.cov
 tools/*
 gen/*
 
+# tmp directory
+tmp
+*/tmp
 # Go workspace file
 go.work
 go.work.sum

@@ -1,7 +1,6 @@
 package log
 
 import (
-	"io"
 	"testing"
 
 	api "github.com/k20ku/proglog/gen/go/log/v1"
@@ -36,7 +35,7 @@ func TestSegment(t *testing.T) {
 	}
 
 	_, err = s.Append(want)
-	require.ErrorIs(t, err, io.EOF)
+	require.ErrorIs(t, err, errSegmentMaxed)
 
 	// maxed index
 	require.True(t, s.IsMaxed())
