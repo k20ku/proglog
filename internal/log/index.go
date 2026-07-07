@@ -59,12 +59,8 @@ func newIndex(f *os.File, c Config) (*index, error) {
 // and that the persisted file has flushed its contents to stable storage.
 // It truncates empty spaces in index file in closing, so as to restart service properly.
 func (i *index) Close() error {
-	// sync data to persisted file synchronusly
-	if err := unix.Msync(i.mmap, unix.MS_SYNC); err != nil {
-		return fmt.Errorf("failed to sync data to index persisted file: %+v", err)
-	}
-	if err := i.file.Sync(); err != nil {
-		return fmt.Errorf("failed to sync file to stable storage: %+v", err)
+	if err := i.Sync(); err != nil {
+		return err
 	}
 	// on closing, it truncates persisted file to the amount of data that is actually in it.
 	if err := i.file.Truncate(int64(i.size)); err != nil {
@@ -72,6 +68,17 @@ func (i *index) Close() error {
 	}
 	if err := i.file.Close(); err != nil {
 		return fmt.Errorf("failed to close persisted file: %+v", err)
+	}
+	return nil
+}
+
+func (i *index) Sync() error {
+	// sync data to persisted file synchronusly
+	if err := unix.Msync(i.mmap, unix.MS_SYNC); err != nil {
+		return fmt.Errorf("failed to sync data to index persisted file: %+v", err)
+	}
+	if err := i.file.Sync(); err != nil {
+		return fmt.Errorf("failed to sync file to stable storage: %+v", err)
 	}
 	return nil
 }

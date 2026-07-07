@@ -3,6 +3,7 @@ package log
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"slices"
@@ -52,23 +53,6 @@ func NewLog(dir string, c Config) (*Log, error) {
 	return l, nil
 }
 
-// func (l *Log) setup() error {
-//     offsets, err := l.loadBaseOffsets()
-//     if err != nil {
-//         return err
-//     }
-
-//     if err := l.loadSegments(offsets); err != nil {
-//         return err
-//     }
-
-//     if len(l.segments) == 0 {
-//         return l.appendSegment(l.Config.Segment.InitialOffset)
-//     }
-
-//	    l.activeSegment = l.segments[len(l.segments)-1]
-//	    return nil
-//	}
 func (l *Log) setup() error {
 	baseOffsets, err := loadBaseOffsets(l.Dir)
 	if err != nil {
@@ -126,7 +110,6 @@ func loadBaseOffsets(dir string) ([]uint64, error) {
 }
 
 func (l *Log) buildSegments(baseOffsets []uint64) error {
-	fmt.Println(baseOffsets, ": baseOffsets")
 	// log appends the new segment for each baseOffset
 	for _, baseOffset := range baseOffsets {
 		if err := l.appendSegment(baseOffset); err != nil {
@@ -148,6 +131,7 @@ func (l *Log) appendSegment(baseOffset uint64) error {
 			"log failed to new segment (baseOffset: %d): %v",
 			baseOffset, err)
 	}
+	l.sync()
 	l.segments = append(l.segments, s)
 	l.activeSegment = s
 	return nil
@@ -160,10 +144,7 @@ func (l *Log) appendSegment(baseOffset uint64) error {
 func (l *Log) Append(record *api.Record) (off uint64, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	fmt.Printf("active=%d next=%d\n",
-		l.activeSegment.baseOffset,
-		l.activeSegment.nextOffset,
-	)
+
 	off, err = l.activeSegment.Append(record)
 	if err != nil {
 		if errors.Is(err, errSegmentMaxed) {
@@ -175,9 +156,6 @@ func (l *Log) Append(record *api.Record) (off uint64, err error) {
 		}
 	}
 	if l.activeSegment.IsMaxed() {
-		fmt.Println("Active Segments Maxed\n",
-			l.Config.Segment.MaxIndexBytes, l.Config.Segment.MaxStoreBytes,
-		)
 		err = l.appendSegment(off + 1)
 	}
 	return off, err
@@ -196,9 +174,11 @@ func (l *Log) roll(record *api.Record) (uint64, error) {
 	return off, err
 }
 
+// Read Record at off offfset.
+// If offset is not exist, returns ErrOffsetOutOfRange
 func (l *Log) Read(off uint64) (*api.Record, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 
 	s, found := l.binarySearch(off)
 	if !found || s == nil {
@@ -229,7 +209,6 @@ func (l *Log) binarySearch(off uint64) (s *segment, found bool) {
 	n := sort.Search(len(l.segments), func(i int) bool {
 		return off < l.segments[i].baseOffset // CAUTION: not <=
 	})
-	fmt.Println(n, ": sort.Search")
 	if !(1 <= n) {
 		return nil, false
 	}
@@ -253,6 +232,42 @@ func (l *Log) Close() error {
 	return nil
 }
 
+func (l *Log) Sync() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.sync()
+}
+
+// sync active segments
+func (l *Log) sync() error {
+	if err := l.activeSegment.SyncAll(); err != nil {
+		return fmt.Errorf("Log failed to sync: %v", err)
+	}
+	return nil
+}
+
+// Remove all segments whose highest offset is lower than lowest.
+func (l *Log) Truncate(lowest uint64) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if lowest >= l.activeSegment.baseOffset {
+		return ErrOffsetOutOfRange
+	}
+	var segments []*segment
+	for _, s := range l.segments {
+		if s.nextOffset <= lowest+1 {
+			baseOffset := s.baseOffset
+			if err := s.Remove(); err != nil {
+				return fmt.Errorf(
+					"Truncating Log failed at baseOffset %d: %v", baseOffset, err)
+			}
+		} else {
+			segments = append(segments, s)
+		}
+	}
+	return nil
+}
+
 // Removes this log and removes this data all
 func (l *Log) Remove() error {
 	if err := l.Close(); err != nil {
@@ -265,12 +280,34 @@ func (l *Log) Remove() error {
 	for _, entry := range entries {
 		if err := os.RemoveAll(entry.Name()); err != nil {
 			return fmt.Errorf(
-				"Removing log (%v) failed to remove data in %s: %v",
-				l, l.Dir, err,
+				"Removing log failed in removing data in %s: %v",
+				l.Dir, err,
 			)
 		}
 	}
 	return nil
+}
+
+// Reader returns io.Reader to snapshot the wholelog for restoreing the whole log
+func (l *Log) Reader() io.Reader {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	readers := make([]io.Reader, len(l.segments))
+	for i, segment := range l.segments {
+		readers[i] = &originStoreReader{segment.store, 0}
+	}
+	return io.MultiReader(readers...)
+}
+
+type originStoreReader struct {
+	*store
+	off int64
+}
+
+func (o *originStoreReader) Read(p []byte) (int, error) {
+	n, err := o.ReadAt(p, o.off)
+	o.off += int64(n)
+	return n, err
 }
 
 // Deprecated: Reset is intented only for tests. Prefer creating a new log.
@@ -288,15 +325,15 @@ func (l *Log) Reset() error {
 //   - what node has oldest and newest data
 //   - what node are falling behind and need to repliate
 func (l *Log) LowestOffset() (uint64, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 
 	return l.segments[0].baseOffset, nil
 }
 
 func (l *Log) HighestOffset() (uint64, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 
 	off := l.segments[len(l.segments)-1].nextOffset
 	if off == 0 {

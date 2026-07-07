@@ -2,11 +2,13 @@ package log
 
 import (
 	"fmt"
+	"io"
 	"testing"
 
 	api "github.com/k20ku/proglog/gen/go/log/v1"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestLogBasic(t *testing.T) {
@@ -16,6 +18,8 @@ func TestLogBasic(t *testing.T) {
 		"append and read a record succeeds": testAppendRead,
 		"offset out of range error":         testOutRangeErr,
 		"init with existing segments":       testInitExisting,
+		"reader":                            testReader,
+		"truncate":                          testTruncate,
 	} {
 		t.Run(senario, func(t *testing.T) {
 			dir := t.TempDir()
@@ -75,6 +79,41 @@ func testInitExisting(t *testing.T, lg *Log) {
 	off, err = newLg.HighestOffset()
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), off)
+}
+
+func testReader(t *testing.T, log *Log) {
+	append := &api.Record{
+		Value: []byte("Hello Proglog!"),
+	}
+	off, err := log.Append(append)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), off)
+
+	reader := log.Reader()
+	b, err := io.ReadAll(reader)
+	require.NoError(t, err)
+
+	read := &api.Record{}
+	err = proto.Unmarshal(b[lenWidth:], read)
+	require.NoError(t, err)
+	require.Equal(t, append.Value, read.Value)
+}
+
+func testTruncate(t *testing.T, log *Log) {
+	append := &api.Record{
+		Value: []byte("Hello Proglog!"),
+	}
+
+	for range 3 {
+		_, err := log.Append(append)
+		require.NoError(t, err)
+	}
+
+	err := log.Truncate(1)
+	require.NoError(t, err)
+
+	_, err = log.Read(0)
+	require.Error(t, err)
 }
 
 func TestLogConcurrecy(t *testing.T) {

@@ -3,6 +3,7 @@ package log
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -10,6 +11,9 @@ import (
 
 var (
 	enc = binary.BigEndian // network endian
+
+	// errors
+	errSyncStoreFailed = errors.New("sync store failed")
 )
 
 const (
@@ -81,7 +85,7 @@ func (s *store) ReadAt(p []byte, off int64) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.buf.Flush(); err != nil {
-		return 0, err
+		return 0, errSyncStoreFailed
 	}
 	return s.File.ReadAt(p, off)
 }
@@ -90,8 +94,26 @@ func (s *store) ReadAt(p []byte, off int64) (int, error) {
 func (s *store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.buf.Flush(); err != nil {
+	if err := s.sync(); err != nil {
 		return err
 	}
 	return s.File.Close()
+}
+
+// Sync this store to stable storage
+// if sync is dailed, returns errSyncStoreFailed
+func (s *store) Sync() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sync()
+}
+
+func (s *store) sync() error {
+	if err := s.buf.Flush(); err != nil {
+		return errSyncStoreFailed
+	}
+	if err := s.File.Sync(); err != nil {
+		return errSyncStoreFailed
+	}
+	return nil
 }

@@ -97,7 +97,6 @@ func (s *segment) Append(record *api.Record) (offset uint64, err error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed: %v", err)
 	}
-	fmt.Println(len(p))
 	// appends an entry to the store file
 	_, pos, err := s.store.Append(p)
 	if err != nil {
@@ -172,11 +171,21 @@ func (s *segment) Remove() error {
 
 // close this segment.
 func (s *segment) Close() error {
+	if err := s.store.Close(); err != nil {
+		return fmt.Errorf("segment failed to close the store: %w", err)
+	}
 	if err := s.index.Close(); err != nil {
 		return fmt.Errorf("segment failed to close the index: %w", err)
 	}
-	if err := s.store.Close(); err != nil {
-		return fmt.Errorf("segment failed to close the store: %w", err)
+	return nil
+}
+
+func (s *segment) SyncAll() error {
+	if err := s.store.Sync(); err != nil {
+		return fmt.Errorf("segment failed to sync store: %v", err)
+	}
+	if err := s.index.Sync(); err != nil {
+		return fmt.Errorf("segment failed to sync store: %v", err)
 	}
 	return nil
 }
