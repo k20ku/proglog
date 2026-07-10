@@ -3,6 +3,7 @@ package log
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 
@@ -25,38 +26,129 @@ type segment struct {
 	config     Config
 }
 
+type indexEntry struct {
+	Offset   uint32
+	Position uint64
+}
+
+func (s *segment) LastIndex() (*indexEntry, error) {
+	off, pos, err := s.index.Read(-1)
+	if err != nil {
+		return nil, err
+	}
+
+	return &indexEntry{
+		Offset:   off,
+		Position: pos,
+	}, nil
+}
+
 // The log call newSegment when it needs to add a new segment,
 // such as when the current active segment hits its max size.
 //   - If the index has no entry, the next record appended to the segment is the first record and its offset is segment's base offset.
 //   - If the index has at least one entry, the next record appended under and its offset is at the end of the segment.
-func newSegment(dir string, baseOffset uint64, c Config) (*segment, error) {
+func newSegment(dir string, baseOffset uint64, cfg Config) (*segment, error) {
 	s := &segment{
 		baseOffset: baseOffset,
-		config:     c,
+		config:     cfg,
 	}
-	var err error
-	// store
-	storePath := path.Join(dir, fmt.Sprintf("%d%s", baseOffset, ".store"))
+
+	if err := s.loadStore(dir); err != nil {
+		return nil, err
+	}
+
+	if err := s.loadIndex(dir); err != nil {
+		return nil, err
+	}
+
+	if err := s.repairIndex(); err != nil {
+		return nil, err
+	}
+
+	if err := s.verifyIndex(); err != nil {
+		return nil, err
+	}
+
+	if err := s.initNextOffset(); err != nil {
+		return nil, err
+	}
+
+	return s, nil
+}
+
+func (s *segment) repairIndex() error {
+	if s.store.size == 0 {
+		return nil
+	}
+
+	if _, _, err := s.lastIndex(); err == nil {
+		return nil
+	} else {
+		switch {
+		case errors.Is(err, errIndexEmpty),
+			errors.Is(err, errIndexOutOfRange):
+			// recover below
+
+		default:
+			return fmt.Errorf("read last index: %w", err)
+		}
+	}
+
+	if err := s.BuildIndexFromStore(); err != nil {
+		return fmt.Errorf("rebuild index: %w", err)
+	}
+
+	return nil
+}
+
+func (s *segment) verifyIndex() error {
+	if s.store.size == 0 {
+		return nil
+	}
+
+	_, pos, err := s.lastIndex()
+	if err != nil {
+		return fmt.Errorf("read last index: %w", err)
+	}
+
+	lastPos, err := s.store.LastPositionAbove(pos)
+	if err != nil {
+		return fmt.Errorf("verify store: %w", err)
+	}
+
+	if pos >= lastPos {
+		return nil
+	}
+
+	if err := s.BuildIndexFromStore(); err != nil {
+		return fmt.Errorf("rebuild incomplete index: %w", err)
+	}
+
+	return nil
+}
+
+func (s *segment) loadStore(dir string) error {
+	storePath := path.Join(dir, fmt.Sprintf("%d%s", s.baseOffset, ".store"))
 	storeFile, err := os.OpenFile(
 		storePath,
 		os.O_CREATE|os.O_RDWR|os.O_APPEND,
 		0644,
 	)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"segment failed to open %s: %w",
-			storePath, err,
-		)
+		return fmt.Errorf("segment failed to open %s: %w", storePath, err)
 	}
-	if s.store, err = newStore(storeFile); err != nil {
-		return nil, fmt.Errorf(
-			"segment failed to newStore: %v",
-			err,
-		)
+	_store, err := newStore(storeFile)
+	if err != nil {
+		return fmt.Errorf("segment failed to load store: %v", err)
 	}
-	// index
+
+	s.store = _store
+	return nil
+}
+
+func (s *segment) loadIndex(dir string) error {
 	indexPath := path.Join(
-		dir, fmt.Sprintf("%d%s", baseOffset, ".index"),
+		dir, fmt.Sprintf("%d%s", s.baseOffset, ".index"),
 	)
 	indexFile, err := os.OpenFile(
 		indexPath,
@@ -64,21 +156,66 @@ func newSegment(dir string, baseOffset uint64, c Config) (*segment, error) {
 		0644,
 	)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"segment failed to open %s: %w",
-			indexPath, err,
-		)
+		return fmt.Errorf("segment failed to open %s: %w", indexPath, err)
 	}
-	if s.index, err = newIndex(indexFile, c); err != nil {
-		return nil, fmt.Errorf("segment failed to newIndex: %v", err)
+	_index, err := newIndex(indexFile, s.config)
+	if err != nil {
+		return fmt.Errorf("segment failed to loadIndex : %v", err)
 	}
-	// nextOffset
-	if off, _, err := s.index.Read(-1); err != nil {
-		s.nextOffset = baseOffset
-	} else {
-		s.nextOffset = baseOffset + uint64(off) + 1
+
+	s.index = _index
+	return nil
+}
+
+func (s *segment) initNextOffset() error {
+	if s.store.size == 0 {
+		s.nextOffset = s.baseOffset
+		return nil
 	}
-	return s, nil
+
+	off, _, err := s.lastIndex()
+	if err != nil {
+		return fmt.Errorf("read last index: %w", err)
+	}
+
+	s.nextOffset = s.baseOffset + uint64(off) + 1
+
+	return nil
+}
+
+func (s *segment) lastIndex() (uint32, uint64, error) {
+	return s.index.Read(-1)
+}
+
+func (s *segment) BuildIndexFromStore() error {
+	off := s.baseOffset
+	pos := s.baseOffset
+
+	for {
+		// appends an entry to the store file
+		p, err := s.store.Read(pos)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("segment encountered: %v", err)
+		}
+
+		// write to relative off
+		err = s.index.Write(uint32(off-s.baseOffset), pos)
+		if errors.Is(err, errIndexFulled) {
+			return errSegmentMaxed
+		}
+		if err != nil {
+			return fmt.Errorf("segment writes to the index file: %w", err)
+		}
+
+		pos += lenWidth + uint64(len(p))
+		off++
+	}
+
+	s.nextOffset = off
+	return nil
 }
 
 // Appends the record to the segment and returns the newly appended record's offset.
@@ -130,6 +267,9 @@ func (s *segment) Read(off uint64) (*api.Record, error) {
 	// reads the position from the entry
 	// TODO: error handling, this can be throws errSegmentOffsetOutOfRangeErr
 	_, pos, err := s.index.Read(int64(off - s.baseOffset))
+	if errors.Is(err, errIndexEmpty) {
+		err = s.BuildIndexFromStore()
+	}
 	if err != nil {
 		return nil, fmt.Errorf(
 			"segment failed to read the position from the entry: %v",
@@ -180,7 +320,7 @@ func (s *segment) Close() error {
 	return nil
 }
 
-func (s *segment) SyncAll() error {
+func (s *segment) Sync() error {
 	if err := s.store.Sync(); err != nil {
 		return fmt.Errorf("segment failed to sync store: %v", err)
 	}

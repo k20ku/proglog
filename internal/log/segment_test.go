@@ -1,6 +1,8 @@
 package log
 
 import (
+	"fmt"
+	"os"
 	"testing"
 
 	api "github.com/k20ku/proglog/gen/go/log/v1"
@@ -46,6 +48,8 @@ func TestSegment(t *testing.T) {
 	s, err = newSegment(dir, baseOffset, c)
 	require.NoErrorf(t, err, "failed to second new session: %v", err)
 	// maxed store
+	// TODO: 二回目のnewSegmentがnilになる
+	require.NotNil(t, s)
 	require.True(t, s.IsMaxed())
 
 	err = s.Remove()
@@ -53,4 +57,38 @@ func TestSegment(t *testing.T) {
 	s, err = newSegment(dir, baseOffset, c)
 	require.NoError(t, err)
 	require.False(t, s.IsMaxed())
+}
+
+func TestRebuildIndex(t *testing.T) {
+	dir := t.TempDir()
+	record := &api.Record{Value: []byte("Hello Proglog!")}
+	c := Config{}
+	c.Segment.MaxIndexBytes = 5 * entWidth
+	c.Segment.MaxStoreBytes = 1024
+	baseOffset := uint64(0)
+	s, err := newSegment(dir, baseOffset, c)
+	require.NoError(t, err)
+	for i := uint64(0); i < 3; i++ {
+		off, err := s.Append(record)
+		require.NoErrorf(t, err, "failed s.Append(%v) at %d", record, i)
+		require.Equal(t, baseOffset+i, off)
+	}
+	err = s.Close()
+	require.NoError(t, err)
+	err = os.Remove(s.index.Name())
+	require.NoError(t, err)
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	for _, entry := range entries {
+		fmt.Println(entry.Name())
+	}
+
+	s, err = newSegment(dir, baseOffset, c)
+	require.NoError(t, err)
+	for i := uint64(0); i < 3; i++ {
+		read, err := s.Read(i)
+		require.NoError(t, err)
+		require.Equal(t, uint64(i), read.Offset)
+	}
 }

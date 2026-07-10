@@ -131,7 +131,6 @@ func (l *Log) appendSegment(baseOffset uint64) error {
 			"log failed to new segment (baseOffset: %d): %v",
 			baseOffset, err)
 	}
-	l.sync()
 	l.segments = append(l.segments, s)
 	l.activeSegment = s
 	return nil
@@ -156,6 +155,9 @@ func (l *Log) Append(record *api.Record) (off uint64, err error) {
 		}
 	}
 	if l.activeSegment.IsMaxed() {
+		if err := l.activeSegment.Sync(); err != nil {
+			return 0, err
+		}
 		err = l.appendSegment(off + 1)
 	}
 	return off, err
@@ -222,26 +224,24 @@ func (l *Log) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	for _, segment := range l.segments {
-		if err := segment.Close(); err != nil {
+	for _, s := range l.segments {
+		if err := s.Close(); err != nil {
 			return fmt.Errorf(
-				"Closing log (%v) failed to close the segments at base offset %d: %v",
-				l, segment.baseOffset, err)
+				"log closing losing segment at base offset %d: %v",
+				s.baseOffset, err)
 		}
 	}
 	return nil
 }
 
+// sync all segments
 func (l *Log) Sync() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.sync()
-}
-
-// sync active segments
-func (l *Log) sync() error {
-	if err := l.activeSegment.SyncAll(); err != nil {
-		return fmt.Errorf("Log failed to sync: %v", err)
+	for _, s := range l.segments {
+		if err := s.Sync(); err != nil {
+			return fmt.Errorf("log sync: %v", err)
+		}
 	}
 	return nil
 }
@@ -275,12 +275,12 @@ func (l *Log) Remove() error {
 	}
 	entries, err := os.ReadDir(l.Dir)
 	if err != nil {
-		return fmt.Errorf("Removing log failed: %v", err)
+		return fmt.Errorf("remove log: %v", err)
 	}
 	for _, entry := range entries {
 		if err := os.RemoveAll(entry.Name()); err != nil {
 			return fmt.Errorf(
-				"Removing log failed in removing data in %s: %v",
+				"remove log data at %s: %v",
 				l.Dir, err,
 			)
 		}

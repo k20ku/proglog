@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 )
@@ -14,6 +15,7 @@ var (
 
 	// errors
 	errSyncStoreFailed = errors.New("sync store failed")
+	errStoreBroken     = errors.New("store file is broken")
 )
 
 const (
@@ -63,6 +65,7 @@ func (s *store) Append(p []byte) (n uint64, pos uint64, err error) {
 }
 
 // returns the record stored at the given position
+// At end of store, error is io.EOF
 func (s *store) Read(pos uint64) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -80,7 +83,9 @@ func (s *store) Read(pos uint64) ([]byte, error) {
 	return b, nil
 }
 
-// ReadAt reads len(p) bytes from the persisted file beginning at the byte offset off
+// ReadAt reads len(p) bytes from the File starting at byte offset off.
+// It returns the number of bytes read and the error, if any.
+// ReadAt always returns a non-nil error when n < len(b). At end of file, that error is io.EOF.
 func (s *store) ReadAt(p []byte, off int64) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -116,4 +121,36 @@ func (s *store) sync() error {
 		return errSyncStoreFailed
 	}
 	return nil
+}
+
+// error is
+//   - errStoreBroken
+//   - other I/O error
+func (s *store) LastPositionAbove(pos uint64) (lastPos uint64, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.buf.Flush(); err != nil {
+		return 0, fmt.Errorf("failed to flush buffer: %+v", err)
+	}
+	size_buf := make([]byte, lenWidth)
+	for {
+		n, err := s.File.ReadAt(size_buf, int64(pos))
+		if errors.Is(err, io.EOF) {
+			if n == 0 {
+				break
+			}
+			return pos, errStoreBroken
+		} else if err != nil {
+			return 0, fmt.Errorf(
+				"store failed to get last position above %d pos: %v", pos, err)
+		}
+		size := enc.Uint64(size_buf)
+		b := make([]byte, size)
+		if _, err = s.File.ReadAt(b, int64(pos+lenWidth)); err != nil {
+			return pos, errStoreBroken
+		}
+		lastPos = pos
+		pos += lenWidth + size
+	}
+	return lastPos, nil
 }
