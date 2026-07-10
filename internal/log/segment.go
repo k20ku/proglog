@@ -116,7 +116,7 @@ func (s *segment) verifyIndex() error {
 		return fmt.Errorf("verify store: %w", err)
 	}
 
-	if pos >= lastPos {
+	if pos == lastPos {
 		return nil
 	}
 
@@ -191,6 +191,9 @@ func (s *segment) BuildIndexFromStore() error {
 	off := s.baseOffset
 	pos := s.baseOffset
 
+	// discard any existing (wrong or partially-written) entries so the rebuild
+	// starts from offset 0 instead of appending onto a broken index.
+	s.index.Clear()
 	for {
 		// appends an entry to the store file
 		p, err := s.store.Read(pos)

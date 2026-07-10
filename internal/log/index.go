@@ -133,6 +133,18 @@ func (i *index) Write(off uint32, pos uint64) error {
 	return nil
 }
 
+// Clear resets the write cursor to the beginning of the index so that
+// subsequent Writes overwrite existing entries from offset 0.
+//
+// It is used before rebuilding the index from the store, so that a wrong or
+// partially-written index is discarded instead of being appended to.
+// The underlying mmap keeps its size; stale bytes beyond the new size are never
+// read (Read bounds every access by size) and are dropped when the index is
+// truncated down to size on Close.
+func (i *index) Clear() {
+	i.size = 0
+}
+
 func (i *index) IsFull() bool {
 	return uint64(len(i.mmap)) < i.size+entWidth
 }
