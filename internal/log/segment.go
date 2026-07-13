@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 
 	api "github.com/k20ku/proglog/gen/go/log/v1"
 	"google.golang.org/protobuf/proto"
@@ -25,6 +26,7 @@ type segment struct {
 	baseOffset uint64
 	nextOffset uint64 // prepare for the next appended record under
 	config     Config
+	dir        string
 }
 
 type indexEntry struct {
@@ -52,6 +54,7 @@ func newSegment(dir string, baseOffset uint64, cfg Config) (*segment, error) {
 	s := &segment{
 		baseOffset: baseOffset,
 		config:     cfg,
+		dir:        dir,
 	}
 
 	if err := s.loadStore(dir); err != nil {
@@ -307,9 +310,7 @@ func (s *segment) repairIndex() error {
 		case errors.Is(err, errIndexEmpty),
 			errors.Is(err, errIndexOutOfRange):
 			// recover below
-			fmt.Println("last")
 		default:
-			fmt.Println("last error")
 			return fmt.Errorf("read last index: %w", err)
 		}
 	}
@@ -317,7 +318,6 @@ func (s *segment) repairIndex() error {
 	if err := s.BuildIndexFromStore(); err != nil {
 		return fmt.Errorf("rebuild index: %w", err)
 	}
-	fmt.Println("Rebuild")
 
 	return nil
 }
@@ -348,13 +348,82 @@ func (s *segment) verifyIndex() error {
 	return nil
 }
 
-func (s *segment) BuildIndexFromStore() error {
+func (s *segment) BuildIndexFromStore() (err error) {
+	// e.g. 80.index
+	indexName := s.index.Name()
+	dir := filepath.Dir(indexName)
+
+	// prepare tmp index file.
+	// <baseOffset>.index.*.tmp
+	var tmpf *os.File
+	tmpf, err = os.CreateTemp(
+		dir,
+		filepath.Base(indexName)+".*.tmp",
+	)
+	if err != nil {
+		return fmt.Errorf("segment create tmp index file: %v", err)
+	}
+	// avoid closing tmpf after tmpIndex.Close() closes tmpf
+	tmpfIsClosed := false
+	defer func() {
+		if !tmpfIsClosed {
+			tmpf.Close()
+		}
+		if err != nil {
+			_ = os.Remove(tmpf.Name())
+		}
+	}()
+
+	if err = os.Chmod(tmpf.Name(), 0644); err != nil {
+		return fmt.Errorf("segment chmod tmp index file: %v", err)
+	}
+
+	// tmp index to write entries to tempf from the store
+	var tmpIndex *index
+	tmpIndex, err = newIndex(tmpf, s.config)
+	if err != nil {
+		return fmt.Errorf("segment init tmp index: %v", err)
+	}
+
+	// rebuilding
+	// nextOffset to segment write to next
+	var nextOff uint64
+	nextOff, err = s.buildIndexFromStore(tmpIndex)
+	if err != nil {
+		return fmt.Errorf("segment rebuilding index: %w", err)
+	}
+
+	if err = tmpIndex.Close(); err != nil {
+		return fmt.Errorf("segment close tmp index: %v", err)
+	}
+	// tmp close is successful
+	tmpfIsClosed = true
+	// gofail: var beforeRename struct{}
+	if err = os.Rename(tmpf.Name(), indexName); err != nil {
+		return fmt.Errorf("segment rename tmp index: %v", err)
+	}
+
+	// sync the result of rename
+	if err = DirFsync(dir); err != nil {
+		return fmt.Errorf("segment sync dir: %v", err)
+	}
+
+	// swap index
+	old := s.index
+	// new index
+	if err = s.loadIndex(dir); err != nil {
+		return fmt.Errorf("segment reopen rebuild index: %w", err)
+	}
+	// release the old (now-unlinked) index first so
+	// its fd/mmap don't leak.
+	_ = old.Close()
+	s.nextOffset = nextOff
+	return nil
+}
+
+func (s *segment) buildIndexFromStore(tmpIndex *index) (uint64, error) {
 	off := s.baseOffset
 	pos := uint64(0)
-
-	// discard any existing (wrong or partially-written) entries so the rebuild
-	// starts from offset 0 instead of appending onto a broken index.
-	s.index.Clear()
 	for {
 		// appends an entry to the store file
 		p, err := s.store.Read(pos)
@@ -362,22 +431,42 @@ func (s *segment) BuildIndexFromStore() error {
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("segment encountered: %v", err)
+			return 0, fmt.Errorf("segment encountered: %v", err)
 		}
 
 		// write to relative off
-		err = s.index.Write(uint32(off-s.baseOffset), pos)
+		err = tmpIndex.Write(uint32(off-s.baseOffset), pos)
 		if errors.Is(err, errIndexFulled) {
-			return errSegmentMaxed
+			return 0, errSegmentMaxed
 		}
 		if err != nil {
-			return fmt.Errorf("segment writes to the index file: %w", err)
+			return 0, fmt.Errorf("segment writes to the index file: %w", err)
 		}
 
 		pos += lenWidth + uint64(len(p))
 		off++
 	}
+	return off, nil
+}
 
-	s.nextOffset = off
+func DirFsync(dir string) (err error) {
+	// fsync parent directory
+	// 1. open dir
+	var dirfd *os.File
+	if dirfd, err = os.Open(dir); err != nil {
+		return fmt.Errorf(
+			"openning dir %s to sync: %v",
+			dir,
+			err,
+		)
+	}
+	defer dirfd.Close()
+	// 2. fsync!
+	if err = dirfd.Sync(); err != nil {
+		return fmt.Errorf("sync dir(%s): %v",
+			dir,
+			err,
+		)
+	}
 	return nil
 }
