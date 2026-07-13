@@ -133,40 +133,6 @@ func (s *segment) lastIndex() (uint32, uint64, error) {
 	return s.index.Read(-1)
 }
 
-func (s *segment) BuildIndexFromStore() error {
-	off := s.baseOffset
-	pos := uint64(0)
-
-	// discard any existing (wrong or partially-written) entries so the rebuild
-	// starts from offset 0 instead of appending onto a broken index.
-	s.index.Clear()
-	for {
-		// appends an entry to the store file
-		p, err := s.store.Read(pos)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("segment encountered: %v", err)
-		}
-
-		// write to relative off
-		err = s.index.Write(uint32(off-s.baseOffset), pos)
-		if errors.Is(err, errIndexFulled) {
-			return errSegmentMaxed
-		}
-		if err != nil {
-			return fmt.Errorf("segment writes to the index file: %w", err)
-		}
-
-		pos += lenWidth + uint64(len(p))
-		off++
-	}
-
-	s.nextOffset = off
-	return nil
-}
-
 // Appends the record to the segment and returns the newly appended record's offset.
 // It returns errSegmentMaxed error with offset 0
 // if there is no index storage space to write the entry under.
@@ -379,5 +345,39 @@ func (s *segment) verifyIndex() error {
 		return fmt.Errorf("rebuild incomplete index: %w", err)
 	}
 
+	return nil
+}
+
+func (s *segment) BuildIndexFromStore() error {
+	off := s.baseOffset
+	pos := uint64(0)
+
+	// discard any existing (wrong or partially-written) entries so the rebuild
+	// starts from offset 0 instead of appending onto a broken index.
+	s.index.Clear()
+	for {
+		// appends an entry to the store file
+		p, err := s.store.Read(pos)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("segment encountered: %v", err)
+		}
+
+		// write to relative off
+		err = s.index.Write(uint32(off-s.baseOffset), pos)
+		if errors.Is(err, errIndexFulled) {
+			return errSegmentMaxed
+		}
+		if err != nil {
+			return fmt.Errorf("segment writes to the index file: %w", err)
+		}
+
+		pos += lenWidth + uint64(len(p))
+		off++
+	}
+
+	s.nextOffset = off
 	return nil
 }
