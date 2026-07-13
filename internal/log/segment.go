@@ -12,7 +12,8 @@ import (
 )
 
 var (
-	errSegmentMaxed = errors.New("segment is maxed")
+	errSegmentMaxed          = errors.New("segment is maxed")
+	errSegmentHasBrokenIndex = errors.New("segment has a broken index")
 )
 
 // The segment wraps the index and store to coordinate operations across the two.
@@ -61,70 +62,11 @@ func newSegment(dir string, baseOffset uint64, cfg Config) (*segment, error) {
 		return nil, err
 	}
 
-	if err := s.repairIndex(); err != nil {
-		return nil, err
-	}
-
-	if err := s.verifyIndex(); err != nil {
-		return nil, err
-	}
-
 	if err := s.initNextOffset(); err != nil {
 		return nil, err
 	}
 
 	return s, nil
-}
-
-func (s *segment) repairIndex() error {
-	if s.store.size == 0 {
-		return nil
-	}
-
-	if _, _, err := s.lastIndex(); err == nil {
-		return nil
-	} else {
-		switch {
-		case errors.Is(err, errIndexEmpty),
-			errors.Is(err, errIndexOutOfRange):
-			// recover below
-
-		default:
-			return fmt.Errorf("read last index: %w", err)
-		}
-	}
-
-	if err := s.BuildIndexFromStore(); err != nil {
-		return fmt.Errorf("rebuild index: %w", err)
-	}
-
-	return nil
-}
-
-func (s *segment) verifyIndex() error {
-	if s.store.size == 0 {
-		return nil
-	}
-
-	_, pos, err := s.lastIndex()
-	if err != nil {
-		return fmt.Errorf("read last index: %w", err)
-	}
-
-	lastPos, err := s.store.LastPositionAbove(pos)
-	if err != nil {
-		return fmt.Errorf("verify store: %w", err)
-	}
-
-	if pos == lastPos {
-		return nil
-	}
-
-	if err := s.BuildIndexFromStore(); err != nil {
-		return fmt.Errorf("rebuild incomplete index: %w", err)
-	}
-
-	return nil
 }
 
 func (s *segment) loadStore(dir string) error {
@@ -183,13 +125,17 @@ func (s *segment) initNextOffset() error {
 	return nil
 }
 
+// returns a following errors.
+//
+//   - errIndexEmpty if index is empty,
+//   - errIndexOutOfRange if given relative offset is not in this index
 func (s *segment) lastIndex() (uint32, uint64, error) {
 	return s.index.Read(-1)
 }
 
 func (s *segment) BuildIndexFromStore() error {
 	off := s.baseOffset
-	pos := s.baseOffset
+	pos := uint64(0)
 
 	// discard any existing (wrong or partially-written) entries so the rebuild
 	// starts from offset 0 instead of appending onto a broken index.
@@ -339,4 +285,99 @@ func (s *segment) Sync() error {
 // because 8 is multiples of 4 and 8 is the maximum greatest one that is <= 9
 func nearestMultiples(j, k uint64) uint64 {
 	return (j / k) * k
+}
+
+// The log call newSegment when it needs to add a new segment,
+// such as when the current active segment hits its max size.
+//   - If the index has no entry, the next record appended to the segment is the first record and its offset is segment's base offset.
+//   - If the index has at least one entry, the next record appended under and its offset is at the end of the segment.
+func newSegmentChecked(dir string, baseOffset uint64, cfg Config) (*segment, error) {
+	s := &segment{
+		baseOffset: baseOffset,
+		config:     cfg,
+	}
+
+	if err := s.loadStore(dir); err != nil {
+		return nil, err
+	}
+
+	if err := s.loadIndex(dir); err != nil {
+		return nil, err
+	}
+
+	if err := s.Repair(); err != nil {
+		return nil, err
+	}
+
+	if err := s.initNextOffset(); err != nil {
+		return nil, err
+	}
+
+	return s, nil
+}
+
+func (s *segment) Repair() error {
+	if err := s.repairIndex(); err != nil {
+		return err
+	}
+
+	if err := s.verifyIndex(); err != nil {
+		return err
+	}
+
+	return nil
+
+}
+
+func (s *segment) repairIndex() error {
+	if s.store.size == 0 {
+		return nil
+	}
+
+	if _, _, err := s.lastIndex(); err == nil {
+		return nil
+	} else {
+		switch {
+		case errors.Is(err, errIndexEmpty),
+			errors.Is(err, errIndexOutOfRange):
+			// recover below
+			fmt.Println("last")
+		default:
+			fmt.Println("last error")
+			return fmt.Errorf("read last index: %w", err)
+		}
+	}
+
+	if err := s.BuildIndexFromStore(); err != nil {
+		return fmt.Errorf("rebuild index: %w", err)
+	}
+	fmt.Println("Rebuild")
+
+	return nil
+}
+
+func (s *segment) verifyIndex() error {
+	if s.store.size == 0 {
+		return nil
+	}
+
+	_, pos, err := s.lastIndex()
+	if err != nil {
+		return fmt.Errorf("read last index: %w", err)
+	}
+
+	lastPos, err := s.store.LastPositionAbove(pos)
+	if err != nil {
+		return fmt.Errorf("verify store: %w", err)
+	}
+
+	if pos == lastPos {
+		return nil
+	}
+
+	if err := s.BuildIndexFromStore(); err != nil {
+		return fmt.Errorf("rebuild incomplete index: %w", err)
+	}
+
+	return nil
 }

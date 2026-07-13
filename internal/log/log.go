@@ -111,12 +111,21 @@ func loadBaseOffsets(dir string) ([]uint64, error) {
 
 func (l *Log) buildSegments(baseOffsets []uint64) error {
 	// log appends the new segment for each baseOffset
-	for _, baseOffset := range baseOffsets {
-		if err := l.appendSegment(baseOffset); err != nil {
-			return fmt.Errorf(
-				"building segments failed creating new segment: %v", err,
-			)
+	for i, baseOffset := range baseOffsets {
+		if i < len(baseOffsets)-1 {
+			s, err := newSegment(l.Dir, baseOffset, l.Config)
+			if err != nil {
+				return fmt.Errorf("log building intermediate segment: %v", err)
+			}
+			l.segments = append(l.segments, s)
+		} else {
+			if err := l.appendSegment(baseOffset); err != nil {
+				return fmt.Errorf(
+					"log building last segments: %v", err,
+				)
+			}
 		}
+
 	}
 
 	return nil
@@ -125,7 +134,7 @@ func (l *Log) buildSegments(baseOffsets []uint64) error {
 // this is not opened method
 // The caller MUST hold ths lock of this Log
 func (l *Log) appendSegment(baseOffset uint64) error {
-	s, err := newSegment(l.Dir, baseOffset, l.Config)
+	s, err := newSegmentChecked(l.Dir, baseOffset, l.Config)
 	if err != nil {
 		return fmt.Errorf(
 			"log failed to new segment (baseOffset: %d): %v",

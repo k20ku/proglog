@@ -1,7 +1,6 @@
 package log
 
 import (
-	"fmt"
 	"os"
 	"testing"
 
@@ -78,14 +77,9 @@ func TestRebuildIndex(t *testing.T) {
 	err = os.Remove(s.index.Name())
 	require.NoError(t, err)
 
-	entries, err := os.ReadDir(dir)
+	s, err = newSegmentChecked(dir, baseOffset, c)
 	require.NoError(t, err)
-	for _, entry := range entries {
-		fmt.Println(entry.Name())
-	}
 
-	s, err = newSegment(dir, baseOffset, c)
-	require.NoError(t, err)
 	for i := uint64(0); i < 3; i++ {
 		read, err := s.Read(i)
 		require.NoError(t, err)
