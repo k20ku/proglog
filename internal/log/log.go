@@ -15,10 +15,6 @@ import (
 	api "github.com/k20ku/proglog/gen/go/log/v1"
 )
 
-var (
-	ErrOffsetOutOfRange = errors.New("offset out of range")
-)
-
 type Log struct {
 	mu sync.RWMutex // Readers > Writers
 
@@ -193,7 +189,7 @@ func (l *Log) Read(off uint64) (*api.Record, error) {
 
 	s, found := l.binarySearch(off)
 	if !found || s == nil {
-		return nil, ErrOffsetOutOfRange
+		return nil, ErrOffsetOutOfRange{Offset: off}
 	}
 
 	record, err := s.Read(off)
@@ -260,7 +256,7 @@ func (l *Log) Truncate(lowest uint64) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if lowest >= l.activeSegment.baseOffset {
-		return ErrOffsetOutOfRange
+		return ErrOffsetOutOfRange{Offset: lowest}
 	}
 	var segments []*segment
 	for _, s := range l.segments {

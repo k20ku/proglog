@@ -23,7 +23,7 @@ func TestIndex(t *testing.T) {
 	require.Equal(t, f.Name(), idx.Name())
 
 	entries := []struct {
-		Off uint32
+		Off RelativeOffset
 		Pos uint64
 	}{
 		{Off: 0, Pos: 0},

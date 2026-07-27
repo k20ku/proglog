@@ -22,6 +22,8 @@ const (
 	lenWidth = 8 // 64 bit length
 )
 
+type RelativePosition uint64
+
 type store struct {
 	*os.File
 	mu   sync.Mutex
@@ -70,7 +72,7 @@ func (s *store) Read(pos uint64) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.buf.Flush(); err != nil {
-		return nil, fmt.Errorf("failed to flush buffer: %+v", err)
+		return nil, fmt.Errorf("flush buffer: %w", err)
 	}
 	size := make([]byte, lenWidth)
 	if _, err := s.File.ReadAt(size, int64(pos)); err != nil {

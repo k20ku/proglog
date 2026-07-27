@@ -30,7 +30,7 @@ type segment struct {
 }
 
 type indexEntry struct {
-	Offset   uint32
+	Offset   RelativeOffset
 	Position uint64
 }
 
@@ -61,7 +61,7 @@ func newSegment(dir string, baseOffset uint64, cfg Config) (*segment, error) {
 		return nil, err
 	}
 
-	if err := s.loadIndex(dir); err != nil {
+	if err := s.loadIndex(); err != nil {
 		return nil, err
 	}
 
@@ -84,16 +84,16 @@ func (s *segment) loadStore(dir string) error {
 	}
 	_store, err := newStore(storeFile)
 	if err != nil {
-		return fmt.Errorf("segment failed to load store: %v", err)
+		return fmt.Errorf("segment failed to load store: %w", err)
 	}
 
 	s.store = _store
 	return nil
 }
 
-func (s *segment) loadIndex(dir string) error {
+func (s *segment) loadIndex() error {
 	indexPath := path.Join(
-		dir, fmt.Sprintf("%d%s", s.baseOffset, ".index"),
+		s.dir, fmt.Sprintf("%d%s", s.baseOffset, ".index"),
 	)
 	indexFile, err := os.OpenFile(
 		indexPath,
@@ -105,7 +105,7 @@ func (s *segment) loadIndex(dir string) error {
 	}
 	_index, err := newIndex(indexFile, s.config)
 	if err != nil {
-		return fmt.Errorf("segment failed to loadIndex : %v", err)
+		return fmt.Errorf("segment failed to loadIndex : %w", err)
 	}
 
 	s.index = _index
@@ -132,7 +132,7 @@ func (s *segment) initNextOffset() error {
 //
 //   - errIndexEmpty if index is empty,
 //   - errIndexOutOfRange if given relative offset is not in this index
-func (s *segment) lastIndex() (uint32, uint64, error) {
+func (s *segment) lastIndex() (RelativeOffset, uint64, error) {
 	return s.index.Read(-1)
 }
 
@@ -162,7 +162,7 @@ func (s *segment) Append(record *api.Record) (offset uint64, err error) {
 	// waste data that does not have entry remains in the store
 	if err := s.index.Write(
 		// index offsets are relative to the base offset
-		uint32(s.nextOffset-uint64(s.baseOffset)),
+		relativeOffset(s.baseOffset, s.nextOffset),
 		pos,
 	); err != nil {
 		if errors.Is(err, errIndexFulled) {
@@ -183,14 +183,13 @@ func (s *segment) Append(record *api.Record) (offset uint64, err error) {
 //	assert.Equal(r1, r2)
 func (s *segment) Read(off uint64) (*api.Record, error) {
 	// reads the position from the entry
-	// TODO: error handling, this can be throws errSegmentOffsetOutOfRangeErr
 	_, pos, err := s.index.Read(int64(off - s.baseOffset))
 	if errors.Is(err, errIndexEmpty) {
 		err = s.BuildIndexFromStore()
 	}
 	if err != nil {
 		return nil, fmt.Errorf(
-			"segment failed to read the position from the entry: %v",
+			"segment failed to read the position from the entry: %w",
 			err,
 		)
 	}
@@ -199,7 +198,7 @@ func (s *segment) Read(off uint64) (*api.Record, error) {
 	p, err := s.store.Read(pos)
 	if err != nil {
 		return nil, fmt.Errorf(
-			"segment failed to read the data at offset: %v",
+			"segment failed to read the data at offset: %w",
 			err,
 		)
 	}
@@ -240,10 +239,10 @@ func (s *segment) Close() error {
 
 func (s *segment) Sync() error {
 	if err := s.store.Sync(); err != nil {
-		return fmt.Errorf("segment failed to sync store: %v", err)
+		return fmt.Errorf("segment failed to sync store: %w", err)
 	}
 	if err := s.index.Sync(); err != nil {
-		return fmt.Errorf("segment failed to sync store: %v", err)
+		return fmt.Errorf("segment failed to sync store: %w", err)
 	}
 	return nil
 }
@@ -264,13 +263,14 @@ func newSegmentChecked(dir string, baseOffset uint64, cfg Config) (*segment, err
 	s := &segment{
 		baseOffset: baseOffset,
 		config:     cfg,
+		dir:        dir,
 	}
 
 	if err := s.loadStore(dir); err != nil {
 		return nil, err
 	}
 
-	if err := s.loadIndex(dir); err != nil {
+	if err := s.loadIndex(); err != nil {
 		return nil, err
 	}
 
@@ -306,9 +306,10 @@ func (s *segment) repairIndex() error {
 	if _, _, err := s.lastIndex(); err == nil {
 		return nil
 	} else {
+		var eIndexOutOfRange errIndexOutOfRange
 		switch {
 		case errors.Is(err, errIndexEmpty),
-			errors.Is(err, errIndexOutOfRange):
+			errors.As(err, &eIndexOutOfRange):
 			// recover below
 		default:
 			return fmt.Errorf("read last index: %w", err)
@@ -361,13 +362,13 @@ func (s *segment) BuildIndexFromStore() (err error) {
 		filepath.Base(indexName)+".*.tmp",
 	)
 	if err != nil {
-		return fmt.Errorf("segment create tmp index file: %v", err)
+		return fmt.Errorf("create tmp file %s: %w", dir+filepath.Base(indexName)+".*.tmp", err)
 	}
 	// avoid closing tmpf after tmpIndex.Close() closes tmpf
 	tmpfIsClosed := false
 	defer func() {
 		if !tmpfIsClosed {
-			tmpf.Close()
+			_ = tmpf.Close()
 		}
 		if err != nil {
 			_ = os.Remove(tmpf.Name())
@@ -375,14 +376,14 @@ func (s *segment) BuildIndexFromStore() (err error) {
 	}()
 
 	if err = os.Chmod(tmpf.Name(), 0644); err != nil {
-		return fmt.Errorf("segment chmod tmp index file: %v", err)
+		return fmt.Errorf("chmod tmp file %s: %w", tmpf.Name(), err)
 	}
 
 	// tmp index to write entries to tempf from the store
 	var tmpIndex *index
 	tmpIndex, err = newIndex(tmpf, s.config)
 	if err != nil {
-		return fmt.Errorf("segment init tmp index: %v", err)
+		return fmt.Errorf("init tempolary index: %w", err)
 	}
 
 	// rebuilding
@@ -390,29 +391,29 @@ func (s *segment) BuildIndexFromStore() (err error) {
 	var nextOff uint64
 	nextOff, err = s.buildIndexFromStore(tmpIndex)
 	if err != nil {
-		return fmt.Errorf("segment rebuilding index: %w", err)
+		return fmt.Errorf("rebuilding index: %w", err)
 	}
 
 	if err = tmpIndex.Close(); err != nil {
-		return fmt.Errorf("segment close tmp index: %v", err)
+		return fmt.Errorf("close tmp index: %w", err)
 	}
 	// tmp close is successful
 	tmpfIsClosed = true
 	// gofail: var beforeRename struct{}
 	if err = os.Rename(tmpf.Name(), indexName); err != nil {
-		return fmt.Errorf("segment rename tmp index: %v", err)
+		return fmt.Errorf("rename tmp file %s: %w", tmpf.Name(), err)
 	}
 
 	// sync the result of rename
 	if err = DirFsync(dir); err != nil {
-		return fmt.Errorf("segment sync dir: %v", err)
+		return fmt.Errorf("sync dir %s: %w", dir, err)
 	}
 
 	// swap index
 	old := s.index
 	// new index
-	if err = s.loadIndex(dir); err != nil {
-		return fmt.Errorf("segment reopen rebuild index: %w", err)
+	if err = s.loadIndex(); err != nil {
+		return fmt.Errorf("reload index: %w", err)
 	}
 	// release the old (now-unlinked) index first so
 	// its fd/mmap don't leak.
@@ -427,20 +428,19 @@ func (s *segment) buildIndexFromStore(tmpIndex *index) (uint64, error) {
 	for {
 		// appends an entry to the store file
 		p, err := s.store.Read(pos)
-		if errors.Is(err, io.EOF) {
-			break
-		}
+
 		if err != nil {
-			return 0, fmt.Errorf("segment encountered: %v", err)
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return 0, fmt.Errorf("read store: %w", err)
 		}
 
 		// write to relative off
-		err = tmpIndex.Write(uint32(off-s.baseOffset), pos)
-		if errors.Is(err, errIndexFulled) {
-			return 0, errSegmentMaxed
-		}
+		err = tmpIndex.Write(relativeOffset(s.baseOffset, off), pos)
 		if err != nil {
-			return 0, fmt.Errorf("segment writes to the index file: %w", err)
+			return 0, fmt.Errorf("write index offset=%d pos=%d: %w",
+				relativeOffset(s.baseOffset, off), pos, err)
 		}
 
 		pos += lenWidth + uint64(len(p))
@@ -455,18 +455,22 @@ func DirFsync(dir string) (err error) {
 	var dirfd *os.File
 	if dirfd, err = os.Open(dir); err != nil {
 		return fmt.Errorf(
-			"openning dir %s to sync: %v",
+			"open dir %s: %w",
 			dir,
 			err,
 		)
 	}
-	defer dirfd.Close()
+	defer func() { _ = dirfd.Close() }()
 	// 2. fsync!
 	if err = dirfd.Sync(); err != nil {
-		return fmt.Errorf("sync dir(%s): %v",
+		return fmt.Errorf("sync dir %s: %w",
 			dir,
 			err,
 		)
 	}
 	return nil
+}
+
+func relativeOffset(base, off uint64) RelativeOffset {
+	return RelativeOffset(off - base)
 }

@@ -8,3 +8,44 @@ message Record {
   bytes value = 1;
   uint64 offset = 2;
 }
+
+service LogService {
+  rpc Produce(ProduceRequest) returns (ProduceResponse) {}
+  rpc Consume(ConsumeRequest) returns (ConsumeResponse) {}
+  rpc ProduceStream(stream ProduceStreamRequest) returns (stream ProduceStreamResponse) {}
+  rpc ConsumeStream(ConsumeStreamRequest) returns (stream ConsumeStreamResponse) {}
+}
+
+// Unary
+message ProduceRequest {
+  Record record = 1;
+}
+
+message ProduceResponse {
+  uint64 offset = 1;
+}
+
+message ConsumeRequest {
+  uint64 offset = 1;
+}
+
+message ConsumeResponse {
+  Record record = 1;
+}
+
+// Streaming unit
+message ProduceStreamRequest {
+  Record record = 1;
+}
+
+message ProduceStreamResponse {
+  uint64 offset = 1;
+}
+
+message ConsumeStreamRequest {
+  uint64 offset = 1;
+}
+
+message ConsumeStreamResponse {
+  Record record = 1;
+}
