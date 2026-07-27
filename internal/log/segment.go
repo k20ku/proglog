@@ -184,9 +184,6 @@ func (s *segment) Append(record *api.Record) (offset uint64, err error) {
 func (s *segment) Read(off uint64) (*api.Record, error) {
 	// reads the position from the entry
 	_, pos, err := s.index.Read(int64(off - s.baseOffset))
-	if errors.Is(err, errIndexEmpty) {
-		err = s.BuildIndexFromStore()
-	}
 	if err != nil {
 		return nil, fmt.Errorf(
 			"segment failed to read the position from the entry: %w",
