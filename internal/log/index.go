@@ -60,7 +60,7 @@ func newIndex(f *os.File, c Config) (*index, error) {
 	}
 	idx.size = uint64(fi.Size())
 	maxIndexBytes := c.Segment.MaxIndexBytes
-	if err = os.Truncate(f.Name(), int64(maxIndexBytes)); err != nil {
+	if err = f.Truncate(int64(maxIndexBytes)); err != nil {
 		return nil, fmt.Errorf("Truncate failed: %+v", err)
 	}
 	if idx.mmap, err = unix.Mmap(
