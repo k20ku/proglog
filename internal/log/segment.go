@@ -13,8 +13,7 @@ import (
 )
 
 var (
-	errSegmentMaxed          = errors.New("segment is maxed")
-	errSegmentHasBrokenIndex = errors.New("segment has a broken index")
+	errSegmentMaxed = errors.New("segment is maxed")
 )
 
 // The segment wraps the index and store to coordinate operations across the two.
@@ -361,7 +360,10 @@ func (s *segment) BuildIndexFromStore() (err error) {
 		filepath.Base(indexName)+".*.tmp",
 	)
 	if err != nil {
-		return fmt.Errorf("create tmp file %s: %w", dir+filepath.Base(indexName)+".*.tmp", err)
+		return fmt.Errorf(
+			"create tmp file %s: %w",
+			path.Join(dir, filepath.Base(indexName+".*.tmp")), err,
+		)
 	}
 	// avoid closing tmpf after tmpIndex.Close() closes tmpf
 	tmpfIsClosed := false
