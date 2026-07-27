@@ -10,12 +10,13 @@ import (
 
 type ErrOffsetOutOfRange interface {
 	Offset() uint64
+	Error() string
 }
 
 func ToGRPCStatus(e ErrOffsetOutOfRange) *status.Status {
 	st := status.New(
 		codes.OutOfRange,
-		fmt.Sprintf("offset out of range: %d", e.Offset()),
+		e.Error(),
 	)
 	msg := fmt.Sprintf(
 		"The requested offset is outside the log's range: %d",

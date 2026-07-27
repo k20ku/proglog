@@ -5,8 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 
 	api "github.com/k20ku/proglog/gen/go/log/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type grpcServer struct {
@@ -15,6 +19,16 @@ type grpcServer struct {
 }
 
 var _ api.LogServiceServer = (*grpcServer)(nil)
+
+func NewGRPCServer(config *Config) (*grpc.Server, error) {
+	gsrv := grpc.NewServer()
+	srv, err := newgrpcServer(config)
+	if err != nil {
+		return nil, fmt.Errorf("new gRPC Server: %w", err)
+	}
+	api.RegisterLogServiceServer(gsrv, srv)
+	return gsrv, nil
+}
 
 func newgrpcServer(config *Config) (srv *grpcServer, err error) {
 	srv = &grpcServer{
@@ -51,29 +65,67 @@ func (s *grpcServer) ProduceStream(stream api.LogService_ProduceStreamServer) er
 		if errors.Is(err, io.EOF) {
 			return nil
 		} else if err != nil {
-			return fmt.Errorf("gepcserver ProduceStream: recv req failed: %w", err)
+			return status.Errorf(codes.Internal, "failed to receive")
 		}
 		offset, err := s.appendRecord(req.Record)
 		if err != nil {
-			return fmt.Errorf("grpcServer ProduceStream: append record failed: %w", err)
+			return err
 		}
 		if err := stream.Send(
 			&api.ProduceStreamResponse{Offset: offset},
 		); err != nil {
-			// TODO: sendということであれば普通にまともにエラーresponseを送るのは困難だと
-			// since the connection is likely to be closed unhappily
-			// if send failed
-			return fmt.Errorf("ProduceStream: send faied: %w", err)
+			log.Printf("send offset %d: %v", offset, err)
 		}
 	}
 }
+
+// When the server reaches the end of the log, the server will wait until someone appends a record to the log and then continue streaming records to the client.
+// [Travis Jeffery. distributed-services-with-go_P1.0 (Kindle Position No.2522-2523). Kindle Version. ]
+func (s *grpcServer) ConsumeStream(
+	req *api.ConsumeStreamRequest,
+	stream api.LogService_ConsumeStreamServer,
+) error {
+	for {
+		// Continue reading until stream stops flowing.
+		// request specifies first offset to be incrementally read to
+		select {
+		case <-stream.Context().Done():
+			return nil
+		default:
+			record, err := s.readRecord(req.Offset)
+			if err != nil {
+				if _, ok := errors.AsType[ErrOffsetOutOfRange](err); !ok {
+					return err
+				}
+				continue
+			}
+			if err := stream.Send(
+				&api.ConsumeStreamResponse{Record: record},
+			); err != nil {
+				log.Fatalf("failed to Send: %v", err)
+				return err
+			}
+			req.Offset++
+		}
+	}
+}
+
 func (s *grpcServer) appendRecord(
 	record *api.Record,
 ) (offset uint64, err error) {
 	offset, err = s.CommitLog.Append(record)
 	if err != nil {
-		// TODO: to think of "うーん絶対これ呼び出し側でappend recordってエラーに書くからいいよねこれで"
 		return 0, err
 	}
 	return offset, nil
+}
+
+func (s *grpcServer) readRecord(
+	offset uint64,
+) (*api.Record, error) {
+	record, err := s.CommitLog.Read(offset)
+	if err != nil {
+		return nil, err
+	}
+	return record, nil
 }
