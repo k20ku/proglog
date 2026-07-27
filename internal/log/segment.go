@@ -203,7 +203,9 @@ func (s *segment) Read(off uint64) (*api.Record, error) {
 		)
 	}
 	record := &api.Record{}
-	err = proto.Unmarshal(p, record)
+	if err := proto.Unmarshal(p, record); err != nil {
+		return nil, fmt.Errorf("unmarshal failed: %w", err)
+	}
 	return record, nil
 }
 

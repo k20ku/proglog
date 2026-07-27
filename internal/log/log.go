@@ -209,16 +209,17 @@ func (l *Log) binarySearch(off uint64) (s *segment, found bool) {
 	if l.activeSegment.baseOffset <= off && off < l.activeSegment.nextOffset {
 		s = l.activeSegment
 	}
-	// Search uses binary search to find and return the smallest index i in [0, len(l.segments))
-	// at which off < l.segments[i].baseOffset is true,
-	// assuming that on the range [0, n),
-	// - off < l.segments[i].baseOffset implies off < l.segments[i+1].baseOffset
-	// Search returns the first `off < l.segments[index].baseOffset` index. If there is no such index, Search returns len(l.segments).
-	// Search calls f(i) only for i in the range [0, n).
+	// Search uses binary search to find and return the
+	// smallest index i in [0, len(l.segments))
+	// at which `off < l.segments[i].baseOffset`,
+	// assuming that on the range [0, len(l.segment)),
+	// `off < l.segments[i].baseOffset` implies `off < l.segments[i+1].baseOffset`.
+	// Search returns the first `off < l.segments[index].baseOffset` index.
+	// If there is no such index, Search returns len(l.segments).
 	n := sort.Search(len(l.segments), func(i int) bool {
 		return off < l.segments[i].baseOffset // CAUTION: not <=
 	})
-	if n < 1 {
+	if n <= 0 {
 		return nil, false
 	}
 	s = l.segments[n-1]
