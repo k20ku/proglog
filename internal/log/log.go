@@ -50,6 +50,9 @@ func NewLog(dir string, c Config) (*Log, error) {
 }
 
 func (l *Log) setup() error {
+	if err := os.MkdirAll(l.Dir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", l.Dir, err)
+	}
 	baseOffsets, err := loadBaseOffsets(l.Dir)
 	if err != nil {
 		return err
@@ -168,6 +171,7 @@ func (l *Log) Append(record *api.Record) (off uint64, err error) {
 	return off, err
 }
 
+// caller MUST hold mu
 func (l *Log) roll(record *api.Record) (uint64, error) {
 	if err := l.appendSegment(l.activeSegment.nextOffset); err != nil {
 		return 0, fmt.Errorf("rolling for append failed: %v", err)
@@ -199,24 +203,22 @@ func (l *Log) Read(off uint64) (*api.Record, error) {
 	return record, nil
 }
 
+// binarySearch finds the segment containing off
+// caller must hold mu for reading or writing
 func (l *Log) binarySearch(off uint64) (s *segment, found bool) {
 	if l.activeSegment.baseOffset <= off && off < l.activeSegment.nextOffset {
 		s = l.activeSegment
 	}
-	// CAUTION: NOT (>=) !
-	// 0   10  20  30  40 (45)
-	// |___|___|___|____|__:
-	// 0   1   2   3    4
-	// len(l.segments) == 5
-	// |   0   :|   10    :|    |   :
-	// | 0 ~ 9 :| 10 ~ 11 :|    |   :
-	// 0   +--> 1   +--->  2    |   :
-
-	// n in [0, len(l.segments))
+	// Search uses binary search to find and return the smallest index i in [0, len(l.segments))
+	// at which off < l.segments[i].baseOffset is true,
+	// assuming that on the range [0, n),
+	// - off < l.segments[i].baseOffset implies off < l.segments[i+1].baseOffset
+	// Search returns the first `off < l.segments[index].baseOffset` index. If there is no such index, Search returns len(l.segments).
+	// Search calls f(i) only for i in the range [0, n).
 	n := sort.Search(len(l.segments), func(i int) bool {
 		return off < l.segments[i].baseOffset // CAUTION: not <=
 	})
-	if !(1 <= n) {
+	if n < 1 {
 		return nil, false
 	}
 	s = l.segments[n-1]
@@ -252,6 +254,10 @@ func (l *Log) Sync() error {
 }
 
 // Remove all segments whose highest offset is lower than lowest.
+//
+// Note: Truncate is not atomic. If an error occurs while removing segments,
+// some segments may already have been removed from disk while l.segments has
+// not yet been updated. Consider improving recovery or consistency handling.
 func (l *Log) Truncate(lowest uint64) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -263,34 +269,42 @@ func (l *Log) Truncate(lowest uint64) error {
 		if s.nextOffset <= lowest+1 {
 			baseOffset := s.baseOffset
 			if err := s.Remove(); err != nil {
+				// TODO: Segment removal is irreversible. If Remove fails after some
+				/// segments have already been deleted, Truncate exits with a partially
+				// applied state.
 				return fmt.Errorf(
-					"Truncating Log failed at baseOffset %d: %v", baseOffset, err)
+					"trancate baseOffset %d segment: %v",
+					baseOffset, err,
+				)
 			}
-		} else {
-			segments = append(segments, s)
+			continue
 		}
+		segments = append(segments, s)
 	}
+	l.segments = segments
 	return nil
 }
 
-// Removes this log and removes this data all
+// NOTE:
+// https://github.com/travisjeffery/proglog/blob/ed8f516b128e4a95b2b48c5bc17d998a97b31a88/WriteALogPackage/internal/log/log.go#L144
 func (l *Log) Remove() error {
 	if err := l.Close(); err != nil {
 		return err
 	}
-	entries, err := os.ReadDir(l.Dir)
-	if err != nil {
-		return fmt.Errorf("remove log: %v", err)
-	}
-	for _, entry := range entries {
-		if err := os.RemoveAll(entry.Name()); err != nil {
-			return fmt.Errorf(
-				"remove log data at %s: %v",
-				l.Dir, err,
-			)
-		}
+	if err := os.RemoveAll(l.Dir); err != nil {
+		return fmt.Errorf("removeAll %s: %w", l.Dir, err)
 	}
 	return nil
+}
+
+// Deprecated: Reset is intented only for tests. Prefer creating a new log.
+// Reset removes the log and then create a new log to replace it
+// https://github.com/travisjeffery/proglog/blob/ed8f516b128e4a95b2b48c5bc17d998a97b31a88/WriteALogPackage/internal/log/log.go#L151
+func (l *Log) Reset() error {
+	if err := l.Remove(); err != nil {
+		return err
+	}
+	return l.setup()
 }
 
 // Reader returns io.Reader to snapshot the wholelog for restoreing the whole log
@@ -313,15 +327,6 @@ func (o *originStoreReader) Read(p []byte) (int, error) {
 	n, err := o.ReadAt(p, o.off)
 	o.off += int64(n)
 	return n, err
-}
-
-// Deprecated: Reset is intented only for tests. Prefer creating a new log.
-// Reset removes the log and then create a new log to replace it
-func (l *Log) Reset() error {
-	if err := l.Remove(); err != nil {
-		return err
-	}
-	return l.setup()
 }
 
 // we can know the offset range stored in the log.
