@@ -198,7 +198,7 @@ func (l *Log) Read(off uint64) (*api.Record, error) {
 
 	record, err := s.Read(off)
 	if err != nil {
-		return nil, fmt.Errorf("Log failed to read offset (%d) failed: %v", off, err)
+		return nil, fmt.Errorf("read segment offset %d: %w", off, err)
 	}
 	return record, nil
 }
@@ -207,7 +207,7 @@ func (l *Log) Read(off uint64) (*api.Record, error) {
 // caller must hold mu for reading or writing
 func (l *Log) binarySearch(off uint64) (s *segment, found bool) {
 	if l.activeSegment.baseOffset <= off && off < l.activeSegment.nextOffset {
-		s = l.activeSegment
+		return l.activeSegment, true
 	}
 	// Search uses binary search to find and return the
 	// smallest index i in [0, len(l.segments))
@@ -219,12 +219,11 @@ func (l *Log) binarySearch(off uint64) (s *segment, found bool) {
 	n := sort.Search(len(l.segments), func(i int) bool {
 		return off < l.segments[i].baseOffset // CAUTION: not <=
 	})
-	if n <= 0 {
+	if n <= 0 || n >= len(l.segments) {
 		return nil, false
 	}
-	s = l.segments[n-1]
 
-	return s, true
+	return l.segments[n-1], true
 }
 
 // Close this Log, iterating over the segment and close them.

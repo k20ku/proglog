@@ -52,7 +52,7 @@ func (s *grpcServer) Produce(ctx context.Context, req *api.ProduceRequest) (
 func (s *grpcServer) Consume(ctx context.Context, req *api.ConsumeRequest) (
 	*api.ConsumeResponse, error,
 ) {
-	record, err := s.CommitLog.Read(req.Offset)
+	record, err, _ := s.readRecord(req.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -92,9 +92,9 @@ func (s *grpcServer) ConsumeStream(
 		case <-stream.Context().Done():
 			return nil
 		default:
-			record, err := s.readRecord(req.Offset)
+			record, err, outOfRange := s.readRecord(req.Offset)
 			if err != nil {
-				if _, ok := errors.AsType[ErrOffsetOutOfRange](err); !ok {
+				if !outOfRange {
 					return err
 				}
 				continue
@@ -103,7 +103,7 @@ func (s *grpcServer) ConsumeStream(
 				&api.ConsumeStreamResponse{Record: record},
 			); err != nil {
 				log.Fatalf("failed to Send: %v", err)
-				return err
+				return status.Error(codes.Internal, "failed to send")
 			}
 			req.Offset++
 		}
@@ -122,10 +122,17 @@ func (s *grpcServer) appendRecord(
 
 func (s *grpcServer) readRecord(
 	offset uint64,
-) (*api.Record, error) {
-	record, err := s.CommitLog.Read(offset)
+) (record *api.Record, err error, isOutOfRange bool) {
+	record, err = s.CommitLog.Read(offset)
 	if err != nil {
-		return nil, err
+		if _, ok := errors.AsType[ErrOffsetOutOfRange](err); ok {
+			return nil, err, ok
+		}
+		return nil,
+			status.Error(
+				codes.Internal, "Internal Server Error",
+			),
+			false
 	}
-	return record, nil
+	return record, nil, false
 }

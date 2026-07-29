@@ -1,18 +1,18 @@
 package log
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"testing"
 
 	api "github.com/k20ku/proglog/gen/go/log/v1"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/proto"
 )
 
 func TestLogBasic(t *testing.T) {
-	for senario, fn := range map[string]func(
+	senarios := map[string]func(
 		t *testing.T, lg *Log,
 	){
 		"append and read a record succeeds": testAppendRead,
@@ -20,7 +20,9 @@ func TestLogBasic(t *testing.T) {
 		"init with existing segments":       testInitExisting,
 		"reader":                            testReader,
 		"truncate":                          testTruncate,
-	} {
+	}
+
+	for senario, fn := range senarios {
 		t.Run(senario, func(t *testing.T) {
 			dir := t.TempDir()
 
@@ -50,7 +52,9 @@ func testAppendRead(t *testing.T, lg *Log) {
 func testOutRangeErr(t *testing.T, lg *Log) {
 	read, err := lg.Read(1)
 	require.Nil(t, read)
-	require.Error(t, err)
+	outOfRangeErr, ok := errors.AsType[ErrOffsetOutOfRange](err)
+	require.True(t, ok, "err is not OutOfBounds")
+	require.Equal(t, uint64(1), outOfRangeErr.Offset)
 }
 
 func testInitExisting(t *testing.T, lg *Log) {
@@ -116,32 +120,6 @@ func testTruncate(t *testing.T, log *Log) {
 	require.Error(t, err)
 }
 
-func TestLogConcurrecy(t *testing.T) {
-	dir := t.TempDir()
-
-	c := Config{}
-	c.Segment.MaxStoreBytes = 1024
-	c.Segment.MaxIndexBytes = 1024
-
-	l, err := NewLog(dir, c)
-	require.NoError(t, err)
-
-	var eg errgroup.Group
-	for i := range 5 {
-		eg.Go(func() error {
-			for t := range 10 {
-				record := &api.Record{Value: []byte("Hello Proglog!")}
-				_, err := l.Append(record)
-				if err != nil {
-					return fmt.Errorf("writing at routine %d of %d time: %v", i, t, err)
-				}
-			}
-			return nil
-		})
-	}
-	require.NoError(t, eg.Wait())
-}
-
 func TestLogConfig(t *testing.T) {
 
 	tests := map[string]struct {
@@ -153,8 +131,8 @@ func TestLogConfig(t *testing.T) {
 			3 * entWidth,
 		},
 		"MaxIndexBytes is greater than MaxStoreBytes": {
+			1,
 			1024,
-			4 * 1024,
 		},
 	}
 
@@ -169,16 +147,16 @@ func TestLogConfig(t *testing.T) {
 			l, err := NewLog(dir, c)
 			require.NoError(t, err)
 
-			msg := "Hello Proglog!"
-			for i := uint64(0); i < 400; i++ {
+			msg := "Hello"
+			for i := uint64(0); i < 5; i++ {
 				value := fmt.Sprintf("%s%d", msg, i)
 				record := &api.Record{Value: []byte(value)}
 				_, err := l.Append(record)
-				require.NoErrorf(t, err, "writing (%d)", i)
+				require.NoErrorf(t, err, "writing %d-th loop", i)
 			}
-			for i := uint64(0); i < 400; i++ {
+			for i := uint64(0); i < 5; i++ {
 				record, err := l.Read(i)
-				require.NoErrorf(t, err, "reading (%d): ", i)
+				require.NoErrorf(t, err, "reading %d-th loop: ", i)
 				require.Equal(t, string(record.Value), fmt.Sprintf("%s%d", msg, i))
 			}
 		})

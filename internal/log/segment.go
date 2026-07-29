@@ -182,6 +182,7 @@ func (s *segment) Append(record *api.Record) (offset uint64, err error) {
 //	assert.Equal(r1, r2)
 func (s *segment) Read(off uint64) (*api.Record, error) {
 	// reads the position from the entry
+	// TODO: relative offset
 	_, pos, err := s.index.Read(int64(off - s.baseOffset))
 	if err != nil {
 		return nil, fmt.Errorf(
