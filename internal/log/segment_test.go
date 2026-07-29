@@ -60,7 +60,7 @@ func TestSegment(t *testing.T) {
 
 func TestRebuildIndex(t *testing.T) {
 	dir := t.TempDir()
-	record := &api.Record{Value: []byte("Hello Proglog!")}
+	record := &api.Record{Value: []byte("hello")}
 	c := Config{}
 	c.Segment.MaxIndexBytes = 5 * entWidth
 	c.Segment.MaxStoreBytes = 1024
@@ -69,7 +69,7 @@ func TestRebuildIndex(t *testing.T) {
 	require.NoError(t, err)
 	for i := uint64(0); i < 3; i++ {
 		off, err := s.Append(record)
-		require.NoErrorf(t, err, "failed s.Append(%v) at %d", record, i)
+		require.NoErrorf(t, err, "failed append offset %d", i)
 		require.Equal(t, baseOffset+i, off)
 	}
 	err = s.Close()

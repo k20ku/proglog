@@ -11,6 +11,10 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const (
+	numberOfEntries = uint64(3)
+)
+
 func TestLogBasic(t *testing.T) {
 	senarios := map[string]func(
 		t *testing.T, lg *Log,
@@ -27,7 +31,7 @@ func TestLogBasic(t *testing.T) {
 			dir := t.TempDir()
 
 			c := Config{}
-			c.Segment.MaxStoreBytes = 32
+			c.Segment.MaxIndexBytes = numberOfEntries * entWidth
 			lg, err := NewLog(dir, c)
 			require.NoError(t, err)
 
@@ -61,7 +65,7 @@ func testInitExisting(t *testing.T, lg *Log) {
 	append := &api.Record{
 		Value: []byte("Hello Proglog!"),
 	}
-	for range 3 {
+	for range numberOfEntries {
 		_, err := lg.Append(append)
 		require.NoError(t, err)
 	}
@@ -72,7 +76,7 @@ func testInitExisting(t *testing.T, lg *Log) {
 	require.Equal(t, uint64(0), off)
 	off, err = lg.HighestOffset()
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), off)
+	require.Equal(t, numberOfEntries-1, off)
 
 	newLg, err := NewLog(lg.Dir, lg.Config)
 	require.NoError(t, err)
@@ -82,7 +86,7 @@ func testInitExisting(t *testing.T, lg *Log) {
 	require.Equal(t, uint64(0), off)
 	off, err = newLg.HighestOffset()
 	require.NoError(t, err)
-	require.Equal(t, uint64(2), off)
+	require.Equal(t, numberOfEntries-1, off)
 }
 
 func testReader(t *testing.T, log *Log) {
@@ -108,16 +112,28 @@ func testTruncate(t *testing.T, log *Log) {
 		Value: []byte("Hello Proglog!"),
 	}
 
-	for range 3 {
+	for range numberOfEntries * 2 {
 		_, err := log.Append(append)
 		require.NoError(t, err)
 	}
 
-	err := log.Truncate(1)
+	truncateOffset := numberOfEntries
+	err := log.Truncate(truncateOffset)
 	require.NoError(t, err)
 
-	_, err = log.Read(0)
-	require.Error(t, err)
+	{
+		record, err := log.Read(0)
+		require.Nil(t, record)
+		require.Error(t, err, "read truncated offset")
+		err, ok := errors.AsType[ErrOffsetOutOfRange](err)
+		require.True(t, ok, "read offset 0 is not out of range")
+	}
+
+	{
+		record, err := log.Read(truncateOffset)
+		require.NoError(t, err, "trunc lowest offset not read")
+		require.Equal(t, record.Offset, truncateOffset, "read trunc offset")
+	}
 }
 
 func TestLogConfig(t *testing.T) {
@@ -128,7 +144,7 @@ func TestLogConfig(t *testing.T) {
 	}{
 		"MaxIndexBytes is less than MaxStoreBytes": {
 			1024,
-			3 * entWidth,
+			numberOfEntries * entWidth,
 		},
 		"MaxIndexBytes is greater than MaxStoreBytes": {
 			1,

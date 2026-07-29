@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
@@ -23,6 +24,7 @@ func TestServer(t *testing.T) {
 	){
 		"produce/consume a message to/from the log succeeds": testProduceConsume,
 		"consume past log boundary fails":                    testConsumePastBoundary,
+		"produce/consume stream succeeds":                    testProduceConsumeStream,
 	}
 
 	for senario, fn := range senarios {
@@ -50,9 +52,10 @@ func setupTest(t *testing.T, fn func(*Config)) (
 
 	dir := t.TempDir()
 
-	clog, err := log.NewLog(dir, log.NewConfig())
+	wlog, err := log.NewLog(dir, log.NewConfig())
 	require.NoErrorf(t, err, "new log at %d", dir)
 
+	clog := NewWalCommitLog(wlog)
 	require.Implements(t, (*CommitLog)(nil), clog, "log does not implement commitlog")
 	config = &Config{
 		CommitLog: clog,
@@ -79,7 +82,7 @@ func setupTest(t *testing.T, fn func(*Config)) (
 		server.Stop()
 		_ = cc.Close()
 		_ = l.Close()
-		_ = clog.Close()
+		_ = wlog.Close()
 	}
 }
 func testProduceConsume(t *testing.T, client api.LogServiceClient, config *Config) {
@@ -124,10 +127,57 @@ func testConsumePastBoundary(
 	})
 	require.Nil(t, consume, "consume not nil")
 	got := status.Code(err)
-	fmt.Printf("\n%#v\n", got)
-	// require.Implements(t, (*ErrOffsetOutOfRange)(nil), got)
-	// want := grpc.Code(ErrOffsetOutOfRange{}.GRPCStatus().Err())
-	// if got != want {
-	// 	t.Fatalf("got err: %v, want: %v", got, want)
-	// }
+	want := codes.OutOfRange
+	require.Equal(t, want, got)
+}
+
+func testProduceConsumeStream(
+	t *testing.T,
+	client api.LogServiceClient,
+	config *Config,
+) {
+	ctx := context.Background()
+	records := []*api.Record{
+		{
+			Value:  []byte("first message"),
+			Offset: 0,
+		},
+		{
+			Value:  []byte("second message"),
+			Offset: 1,
+		},
+	}
+
+	{
+		stream, err := client.ProduceStream(ctx)
+		require.NoError(t, err, "client produce stream failed")
+
+		for offset, record := range records {
+			err = stream.Send(&api.ProduceStreamRequest{
+				Record: record,
+			})
+			require.NoErrorf(t, err, "client send %s failed", record.Value)
+			res, err := stream.Recv()
+			require.NoError(t, err, "client receive failed")
+			require.Equal(t, res.Offset, uint64(offset), "offset not eqaul")
+		}
+	}
+
+	{
+		stream, err := client.ConsumeStream(
+			ctx,
+			&api.ConsumeStreamRequest{Offset: 0},
+		)
+		require.NoError(t, err)
+
+		for i, record := range records {
+			res, err := stream.Recv()
+			require.NoError(t, err)
+			require.Equal(t, res.Record, &api.Record{
+				Value:  record.Value,
+				Offset: uint64(i),
+			})
+		}
+	}
+	// stream context Done
 }

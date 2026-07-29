@@ -1,7 +1,6 @@
 package log
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -145,42 +144,19 @@ func (l *Log) appendSegment(baseOffset uint64) error {
 }
 
 // Append is safe with concurrent accesses.
-// It returns EOF error with 0 offset if there is no disk space to append record.
-// 前回追加したときにEOFになってたのならばその時に新たなセグメントを作ってるはずだが，
-// segment関係の永続化に不具合があった場合(セグメント初期化から書き込みの間にindexファイルが消されたなど)があればその限りではない
 func (l *Log) Append(record *api.Record) (off uint64, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	off, err = l.activeSegment.Append(record)
 	if err != nil {
-		if errors.Is(err, errSegmentMaxed) {
-			// rollback
-			return l.roll(record)
-		} else {
-			// fatal
-			return 0, fmt.Errorf("log failed to append: %v", err)
-		}
+		return 0, fmt.Errorf("log failed to append: %v", err)
 	}
 	if l.activeSegment.IsMaxed() {
 		if err := l.activeSegment.Sync(); err != nil {
 			return 0, err
 		}
 		err = l.appendSegment(off + 1)
-	}
-	return off, err
-}
-
-// caller MUST hold mu
-func (l *Log) roll(record *api.Record) (uint64, error) {
-	if err := l.appendSegment(l.activeSegment.nextOffset); err != nil {
-		return 0, fmt.Errorf("rolling for append failed: %v", err)
-	}
-	// append to new segment
-	off, err := l.activeSegment.Append(record)
-	if err != nil {
-		// Even if segment returns errSegmentMaxed, we dismisses it
-		return 0, fmt.Errorf("append to logSegment failed in rolling: %v", err)
 	}
 	return off, err
 }
@@ -238,6 +214,9 @@ func (l *Log) Close() error {
 				s.baseOffset, err)
 		}
 	}
+	if err := dirSync(l.Dir); err != nil {
+		return fmt.Errorf("fsync %s: %w", l.Dir, err)
+	}
 	return nil
 }
 
@@ -250,6 +229,9 @@ func (l *Log) Sync() error {
 			return fmt.Errorf("log sync: %v", err)
 		}
 	}
+	if err := dirSync(l.Dir); err != nil {
+		return fmt.Errorf("fsync %s: %w", l.Dir, err)
+	}
 	return nil
 }
 
@@ -261,12 +243,9 @@ func (l *Log) Sync() error {
 func (l *Log) Truncate(lowest uint64) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if lowest >= l.activeSegment.baseOffset {
-		return ErrOffsetOutOfRange{Offset: lowest}
-	}
 	var segments []*segment
 	for _, s := range l.segments {
-		if s.nextOffset <= lowest+1 {
+		if s.nextOffset-1 <= lowest {
 			baseOffset := s.baseOffset
 			if err := s.Remove(); err != nil {
 				// TODO: Segment removal is irreversible. If Remove fails after some
@@ -281,6 +260,11 @@ func (l *Log) Truncate(lowest uint64) error {
 		}
 		segments = append(segments, s)
 	}
+
+	if err := dirSync(l.Dir); err != nil {
+		return fmt.Errorf("fsync %s: %w", l.Dir, err)
+	}
+
 	l.segments = segments
 	return nil
 }

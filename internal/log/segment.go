@@ -149,12 +149,12 @@ func (s *segment) Append(record *api.Record) (offset uint64, err error) {
 
 	p, err := proto.Marshal(record)
 	if err != nil {
-		return 0, fmt.Errorf("failed: %v", err)
+		return 0, fmt.Errorf("segment marshal record: %v", err)
 	}
 	// appends an entry to the store file
 	_, pos, err := s.store.Append(p)
 	if err != nil {
-		return 0, fmt.Errorf("segement appends to the store file: %v", err)
+		return 0, fmt.Errorf("segement append to store: %v", err)
 	}
 	// after append to the store, then write the entry to the index file
 	// WARNING: If this index write failed while appending store is successful,
@@ -407,7 +407,7 @@ func (s *segment) BuildIndexFromStore() (err error) {
 	}
 
 	// sync the result of rename
-	if err = DirFsync(dir); err != nil {
+	if err = dirSync(dir); err != nil {
 		return fmt.Errorf("sync dir %s: %w", dir, err)
 	}
 
@@ -449,28 +449,6 @@ func (s *segment) buildIndexFromStore(tmpIndex *index) (uint64, error) {
 		off++
 	}
 	return off, nil
-}
-
-func DirFsync(dir string) (err error) {
-	// fsync parent directory
-	// 1. open dir
-	var dirfd *os.File
-	if dirfd, err = os.Open(dir); err != nil {
-		return fmt.Errorf(
-			"open dir %s: %w",
-			dir,
-			err,
-		)
-	}
-	defer func() { _ = dirfd.Close() }()
-	// 2. fsync!
-	if err = dirfd.Sync(); err != nil {
-		return fmt.Errorf("sync dir %s: %w",
-			dir,
-			err,
-		)
-	}
-	return nil
 }
 
 func relativeOffset(base, off uint64) RelativeOffset {

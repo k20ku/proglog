@@ -13,6 +13,7 @@ import (
 
 var _ CommitLog = (*walCommitLog)(nil)
 
+// CommitLog implementation by WAL log
 type walCommitLog struct {
 	l *log.Log
 }
@@ -26,7 +27,7 @@ func (wl *walCommitLog) Append(record *api.Record) (uint64, error) {
 	if err != nil {
 		return offset, err
 	}
-	return offset, err
+	return offset, nil
 }
 
 func (wl *walCommitLog) Read(offset uint64) (*api.Record, error) {

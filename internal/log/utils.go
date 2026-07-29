@@ -2,9 +2,7 @@ package log
 
 import (
 	"fmt"
-	"io"
 	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -30,20 +28,4 @@ func openFile(name string) (file *os.File, size int64, err error) {
 		return nil, 0, fmt.Errorf("failed to get file info of %s: %+v", name, err)
 	}
 	return f, fi.Size(), nil
-}
-
-func copyToDir(name string, dstDir string) error {
-	f, err := os.Open(name)
-	if err != nil {
-		return fmt.Errorf("failed to open %s: %+v", name, err)
-	}
-	path := fmt.Sprintf("%s/%s", dstDir, filepath.Base(f.Name()))
-	tempf, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_RDWR, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to open %s: %+v\n", path, err)
-	}
-	if _, err = io.Copy(tempf, f); err != nil {
-		return fmt.Errorf("failed to cp %s to %s: %+v\n", f.Name(), path, err)
-	}
-	return nil
 }
