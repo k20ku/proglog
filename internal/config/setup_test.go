@@ -6,13 +6,15 @@ import (
 	"os"
 	"testing"
 
+	"github.com/k20ku/proglog/internal/testdata"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSetup(t *testing.T) {
 	// ---- env ----
-	err := os.Setenv("CERT_DIR", "testdata/cert")
-	require.NoErrorf(t, err, "set env CERT_DIR=%q failed", "testdata/cert")
+	certDir := testdata.TestdataPath("cert")
+	err := os.Setenv("CERT_DIR", certDir)
+	require.NoErrorf(t, err, "set env CERT_DIR=%q failed", certDir)
 
 	// ---- server ----
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))

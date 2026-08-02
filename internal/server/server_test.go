@@ -7,12 +7,14 @@ import (
 	"testing"
 
 	api "github.com/k20ku/proglog/gen/go/log/v1"
+	"github.com/k20ku/proglog/internal/config"
 	"github.com/k20ku/proglog/internal/log"
+	"github.com/k20ku/proglog/internal/testdata"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 )
 
@@ -38,33 +40,50 @@ func TestServer(t *testing.T) {
 
 func setupTest(t *testing.T, fn func(*Config)) (
 	client api.LogServiceClient,
-	config *Config,
+	cfg *Config,
 	teardown func(),
 ) {
 	t.Helper()
 
-	l, err := net.Listen("tcp", ":0")
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err, "listen on port 0")
 
-	clientOptions := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
-	cc, err := grpc.NewClient(l.Addr().String(), clientOptions...)
+	// ---- client TLS ----
+	clientTLSConfig, err := config.SetupTLSConfig(config.TLSConfig{
+		CACertFile: testdata.CACertFile,
+	})
+	require.NoError(t, err, "client setup tls failed")
+	clientCreds := credentials.NewTLS(clientTLSConfig)
+	cc, err := grpc.NewClient(
+		l.Addr().String(),
+		grpc.WithTransportCredentials(clientCreds),
+	)
 	require.NoErrorf(t, err, "new client %s", l.Addr().String())
 
+	// ---- commit log ----
 	dir := t.TempDir()
-
 	wlog, err := log.NewLog(dir, log.NewConfig())
 	require.NoErrorf(t, err, "new log at %d", dir)
-
 	clog := NewWalCommitLog(wlog)
 	require.Implements(t, (*CommitLog)(nil), clog, "log does not implement commitlog")
-	config = &Config{
+	cfg = &Config{
 		CommitLog: clog,
 	}
-
 	if fn != nil {
-		fn(config)
+		fn(cfg)
 	}
-	server, err := NewGRPCServer(config)
+
+	// ---- server TLS ----
+	serverTLSConfig, err := config.SetupTLSConfig(config.TLSConfig{
+		CACertFile:     testdata.CACertFile,
+		ServerKeyFile:  testdata.ServerKeyFile,
+		ServerCertFile: testdata.ServerCertFile,
+		ServerAddress:  l.Addr().String(),
+	})
+	require.NoError(t, err, "client setup tls failed")
+
+	serverCreds := credentials.NewTLS(serverTLSConfig)
+	server, err := NewGRPCServer(cfg, grpc.Creds(serverCreds))
 	require.NoError(t, err, "new gRPC server")
 
 	// TODO: review scope of context
@@ -78,7 +97,7 @@ func setupTest(t *testing.T, fn func(*Config)) (
 	})
 
 	client = api.NewLogServiceClient(cc)
-	return client, config, func() {
+	return client, cfg, func() {
 		server.Stop()
 		_ = cc.Close()
 		_ = l.Close()
