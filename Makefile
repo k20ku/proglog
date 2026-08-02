@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 GOBIN := $(PWD)/tools/bin
-CERT = $(HOME)/.proglog/cert
+CERT_DIR = $(HOME)/.proglog/cert
 
 .PHONY: gen
 gen: buf ## Generate proto files
@@ -22,9 +22,9 @@ clean: ## Clean
 	@rm -rf gen/* tools/*
 
 .PHONY: gencert
-gencert: ## Generate certificate
-	@mkdir -p $(CERT)
-	step certificate create "Root CA" $(CERT)/root-ca.crt $(CERT)/root-ca.key \
+gencert: ## Generate certificate at CERT_DIR. Default CERT_DIR is ${HOME}/.proglog/cert
+	@mkdir -p $(CERT_DIR)
+	step certificate create "Root CA" $(CERT_DIR)/root-ca.pem $(CERT_DIR)/root-ca.key \
 		--profile root-ca \
 		--kty=OKP --curve=Ed25519 \
 		--no-password --insecure \
@@ -32,24 +32,28 @@ gencert: ## Generate certificate
 
 	step certificate create \
 		"Intermediate CA 1" \
-		$(CERT)/intermediate-ca.crt \
-		$(CERT)/intermediate-ca.key \
+		$(CERT_DIR)/ca.pem \
+		$(CERT_DIR)/ca.key \
 		--profile intermediate-ca \
-		--ca $(CERT)/root-ca.crt \
-		--ca-key $(CERT)/root-ca.key \
+		--ca $(CERT_DIR)/root-ca.pem \
+		--ca-key $(CERT_DIR)/root-ca.key \
 		--no-password --insecure \
 		--force \
 
 	step certificate create \
 		--profile leaf \
 		"server" \
-		$(CERT)/server.crt \
-		$(CERT)/server.key \
+		$(CERT_DIR)/server.crt \
+		$(CERT_DIR)/server.key \
 		--not-after=8760h \
-		--ca $(CERT)/intermediate-ca.crt \
-		--ca-key $(CERT)/intermediate-ca.key \
+		--san localhost \
+		--san 127.0.0.1 \
+		--ca $(CERT_DIR)/ca.pem \
+		--ca-key $(CERT_DIR)/ca.key \
 		--no-password --insecure \
 		--bundle -f \
+
+	@echo CERT_DIR=$(CERT_DIR)
 
 .PHONY: help ## Show options
 help:
