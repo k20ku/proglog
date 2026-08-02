@@ -9,6 +9,8 @@ var (
 	CACertFile     = TestdataPath("cert", "ca.pem")
 	ServerCertFile = TestdataPath("cert", "server.crt")
 	ServerKeyFile  = TestdataPath("cert", "server.key")
+	ClientCertFile = TestdataPath("cert", "client.crt")
+	ClientKeyFile  = TestdataPath("cert", "client.key")
 )
 
 func TestdataPath(elem ...string) string {

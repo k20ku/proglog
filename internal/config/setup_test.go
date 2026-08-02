@@ -18,7 +18,7 @@ func TestSetup(t *testing.T) {
 
 	// ---- server ----
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	cfg, err := NewTLSConfig(true)
+	cfg, err := NewServerTLSConfig()
 	require.NoError(t, err)
 	serverTLSConfig, err := SetupTLSConfig(cfg)
 	require.NoError(t, err, "failed to set up server tlsconfig %+v.", cfg)
@@ -30,7 +30,7 @@ func TestSetup(t *testing.T) {
 	})
 
 	// ---- client ----
-	cfg, err = NewTLSConfig(false)
+	cfg, err = NewClientTLSConfig()
 	require.NoError(t, err, "new client Config failed.")
 
 	clientTLSConfig, err := SetupTLSConfig(cfg)

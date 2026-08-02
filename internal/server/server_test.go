@@ -75,10 +75,10 @@ func setupTest(t *testing.T, fn func(*Config)) (
 
 	// ---- server TLS ----
 	serverTLSConfig, err := config.SetupTLSConfig(config.TLSConfig{
-		CACertFile:     testdata.CACertFile,
-		ServerKeyFile:  testdata.ServerKeyFile,
-		ServerCertFile: testdata.ServerCertFile,
-		ServerAddress:  l.Addr().String(),
+		CACertFile:    testdata.CACertFile,
+		KeyFile:       testdata.ServerKeyFile,
+		CertFile:      testdata.ServerCertFile,
+		ServerAddress: l.Addr().String(),
 	})
 	require.NoError(t, err, "client setup tls failed")
 
