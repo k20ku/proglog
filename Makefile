@@ -72,7 +72,7 @@ gencert-client:
 		$(CERT_DIR)/client.crt \
 		$(CERT_DIR)/client.key \
 		--not-after=8760h \
-		--san spiffe://proglog/workload/nobody \
+		--san spiffe://proglog/workload/nobady \
 		--ca $(CERT_DIR)/ca.pem \
 		--ca-key $(CERT_DIR)/ca.key \
 		--no-password --insecure \
