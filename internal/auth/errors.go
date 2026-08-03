@@ -5,7 +5,7 @@ import "fmt"
 var _ error = ErrPermissionDenied{}
 
 type ErrPermissionDenied struct {
-	Subject, Object, Action string
+	Subject, Action, Object string
 }
 
 func (e ErrPermissionDenied) Error() string {

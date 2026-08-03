@@ -13,6 +13,8 @@ var (
 	NobodyKeyFile  = TestdataPath("cert", "nobody-client.key")
 	AdminCertFile  = TestdataPath("cert", "admin-client.crt")
 	AdminKeyFile   = TestdataPath("cert", "admin-client.key")
+	ACLModelFile   = TestdataPath("auth", "model.conf")
+	ACLPolicyFile  = TestdataPath("auth", "policy.csv")
 )
 
 func TestdataPath(elem ...string) string {
