@@ -3,7 +3,7 @@ module github.com/k20ku/proglog
 go 1.26.1
 
 require (
-	github.com/caarlos0/env/v11 v11.4.1
+	github.com/casbin/casbin/v3 v3.10.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/sync v0.21.0
 	golang.org/x/sys v0.42.0
@@ -14,7 +14,6 @@ require (
 
 require (
 	github.com/bmatcuk/doublestar/v4 v4.6.1 // indirect
-	github.com/casbin/casbin/v3 v3.10.0 // indirect
 	github.com/casbin/govaluate v1.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
