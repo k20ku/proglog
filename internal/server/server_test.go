@@ -18,10 +18,15 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+type serviceClientList struct {
+	AdminClient  api.LogServiceClient
+	NobodyClient api.LogServiceClient
+}
+
 func TestServer(t *testing.T) {
 	senarios := map[string]func(
 		t *testing.T,
-		client api.LogServiceClient,
+		clientList *serviceClientList,
 		config *Config,
 	){
 		"produce/consume a message to/from the log succeeds": testProduceConsume,
@@ -31,15 +36,15 @@ func TestServer(t *testing.T) {
 
 	for senario, fn := range senarios {
 		t.Run(senario, func(t *testing.T) {
-			client, config, teardown := setupTest(t, nil)
+			clientList, config, teardown := setupTest(t, nil)
 			t.Cleanup(teardown)
-			fn(t, client, config)
+			fn(t, clientList, config)
 		})
 	}
 }
 
 func setupTest(t *testing.T, fn func(*Config)) (
-	client api.LogServiceClient,
+	clientList *serviceClientList,
 	cfg *Config,
 	teardown func(),
 ) {
@@ -86,34 +91,55 @@ func setupTest(t *testing.T, fn func(*Config)) (
 	})
 
 	// ---- client TLS ----
-	clientTLSConfig, err := config.SetupTLSConfig(config.TLSConfig{
-		CACertFile: testdata.CACertFile,
-		CertFile:   testdata.ClientCertFile,
-		KeyFile:    testdata.ClientKeyFile,
-	})
-	require.NoError(t, err, "client setup tls failed")
-	clientCreds := credentials.NewTLS(clientTLSConfig)
-	cc, err := grpc.NewClient(
-		l.Addr().String(),
-		grpc.WithTransportCredentials(clientCreds),
-	)
-	require.NoErrorf(t, err, "new client %s", l.Addr().String())
-
-	client = api.NewLogServiceClient(cc)
-	return client, cfg, func() {
-		server.Stop()
-		_ = cc.Close()
-		_ = l.Close()
-		_ = wlog.Close()
+	newClient := func(certPath, keyPath string) (
+		*grpc.ClientConn,
+		api.LogServiceClient,
+		[]grpc.DialOption,
+	) {
+		clientTLSConfig, err := config.SetupTLSConfig(config.TLSConfig{
+			CACertFile: testdata.CACertFile,
+			CertFile:   certPath,
+			KeyFile:    keyPath,
+			Server:     false,
+		})
+		require.NoError(t, err, "setup client tls failed")
+		clientCreds := credentials.NewTLS(clientTLSConfig)
+		ops := []grpc.DialOption{grpc.WithTransportCredentials(clientCreds)}
+		conn, err := grpc.NewClient(l.Addr().String(), ops...)
+		require.NoErrorf(t, err, "new client %s", l.Addr().String())
+		client := api.NewLogServiceClient(conn)
+		return conn, client, ops
 	}
+
+	adminConn, adminClient, _ := newClient(
+		testdata.AdminCertFile,
+		testdata.AdminKeyFile,
+	)
+
+	nobodyConn, nobodyClient, _ := newClient(
+		testdata.AdminCertFile,
+		testdata.AdminKeyFile,
+	)
+	return &serviceClientList{
+			AdminClient:  adminClient,
+			NobodyClient: nobodyClient,
+		}, cfg, func() {
+			server.Stop()
+			_ = adminConn.Close()
+			_ = nobodyConn.Close()
+			_ = l.Close()
+			_ = wlog.Close()
+		}
 }
-func testProduceConsume(t *testing.T, client api.LogServiceClient, config *Config) {
+
+func testProduceConsume(t *testing.T, clientList *serviceClientList, config *Config) {
 	ctx := context.Background()
 
 	want := &api.Record{
 		Value: []byte("Hello Proglog"),
 	}
 
+	client := clientList.AdminClient
 	produceRsp, err := client.Produce(
 		ctx,
 		&api.ProduceRequest{
@@ -132,11 +158,12 @@ func testProduceConsume(t *testing.T, client api.LogServiceClient, config *Confi
 
 func testConsumePastBoundary(
 	t *testing.T,
-	client api.LogServiceClient,
+	clientList *serviceClientList,
 	_ *Config,
 ) {
 	ctx := context.Background()
 
+	client := clientList.AdminClient
 	produce, err := client.Produce(ctx, &api.ProduceRequest{
 		Record: &api.Record{
 			Value: []byte("hello world"),
@@ -155,7 +182,7 @@ func testConsumePastBoundary(
 
 func testProduceConsumeStream(
 	t *testing.T,
-	client api.LogServiceClient,
+	clientList *serviceClientList,
 	config *Config,
 ) {
 	ctx := context.Background()
@@ -169,6 +196,8 @@ func testProduceConsumeStream(
 			Offset: 1,
 		},
 	}
+
+	client := clientList.AdminClient
 
 	{
 		stream, err := client.ProduceStream(ctx)

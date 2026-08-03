@@ -68,11 +68,23 @@ gencert-server:
 gencert-client:
 	step certificate create \
 		--profile leaf \
-		"client" \
-		$(CERT_DIR)/client.crt \
-		$(CERT_DIR)/client.key \
+		"Nobody Client" \
+		$(CERT_DIR)/nobody-client.crt \
+		$(CERT_DIR)/nobody-client.key \
 		--not-after=8760h \
-		--san spiffe://proglog/workload/nobady \
+		--san spiffe://proglog/workload/nobody \
+		--ca $(CERT_DIR)/ca.pem \
+		--ca-key $(CERT_DIR)/ca.key \
+		--no-password --insecure \
+		--bundle -f \
+
+	step certificate create \
+		--profile leaf \
+		"Root Client" \
+		$(CERT_DIR)/admin-client.crt \
+		$(CERT_DIR)/admin-client.key \
+		--not-after=8760h \
+		--san spiffe://proglog/workload/admin \
 		--ca $(CERT_DIR)/ca.pem \
 		--ca-key $(CERT_DIR)/ca.key \
 		--no-password --insecure \

@@ -36,7 +36,7 @@ func TestSetup(t *testing.T) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
-		expectedURI := "spiffe://proglog/workload/nobady"
+		expectedURI := "spiffe://proglog/workload/nobody"
 		actualURI := leaf.URIs[0].String()
 		if actualURI != expectedURI {
 			msg := fmt.Sprintf(
@@ -68,8 +68,8 @@ func TestSetup(t *testing.T) {
 	cfg = TLSConfig{
 		CertDir:    certDir,
 		CACertFile: testdata.CACertFile,
-		CertFile:   testdata.ClientCertFile,
-		KeyFile:    testdata.ClientKeyFile,
+		CertFile:   testdata.NobodyCertFile,
+		KeyFile:    testdata.NobodyKeyFile,
 		Server:     false,
 	}
 	clientTLSConfig, err := SetupTLSConfig(cfg)
