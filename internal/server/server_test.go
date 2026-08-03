@@ -48,18 +48,6 @@ func setupTest(t *testing.T, fn func(*Config)) (
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err, "listen on port 0")
 
-	// ---- client TLS ----
-	clientTLSConfig, err := config.SetupTLSConfig(config.TLSConfig{
-		CACertFile: testdata.CACertFile,
-	})
-	require.NoError(t, err, "client setup tls failed")
-	clientCreds := credentials.NewTLS(clientTLSConfig)
-	cc, err := grpc.NewClient(
-		l.Addr().String(),
-		grpc.WithTransportCredentials(clientCreds),
-	)
-	require.NoErrorf(t, err, "new client %s", l.Addr().String())
-
 	// ---- commit log ----
 	dir := t.TempDir()
 	wlog, err := log.NewLog(dir, log.NewConfig())
@@ -78,6 +66,7 @@ func setupTest(t *testing.T, fn func(*Config)) (
 		CACertFile:    testdata.CACertFile,
 		KeyFile:       testdata.ServerKeyFile,
 		CertFile:      testdata.ServerCertFile,
+		Server:        true,
 		ServerAddress: l.Addr().String(),
 	})
 	require.NoError(t, err, "client setup tls failed")
@@ -95,6 +84,20 @@ func setupTest(t *testing.T, fn func(*Config)) (
 		}
 		return nil
 	})
+
+	// ---- client TLS ----
+	clientTLSConfig, err := config.SetupTLSConfig(config.TLSConfig{
+		CACertFile: testdata.CACertFile,
+		CertFile:   testdata.ClientCertFile,
+		KeyFile:    testdata.ClientKeyFile,
+	})
+	require.NoError(t, err, "client setup tls failed")
+	clientCreds := credentials.NewTLS(clientTLSConfig)
+	cc, err := grpc.NewClient(
+		l.Addr().String(),
+		grpc.WithTransportCredentials(clientCreds),
+	)
+	require.NoErrorf(t, err, "new client %s", l.Addr().String())
 
 	client = api.NewLogServiceClient(cc)
 	return client, cfg, func() {
