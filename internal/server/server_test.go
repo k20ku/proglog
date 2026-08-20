@@ -34,22 +34,55 @@ func TestServer(t *testing.T) {
 func testUnauthorized(t *testing.T, clientList *serviceClientList, config *Config) {
 	ctx := context.Background()
 	nobodyClient := clientList.NobodyClient
-	produceResp, err := nobodyClient.Produce(ctx, &api.ProduceRequest{
-		Record: &api.Record{Value: []byte("helloworld")},
-	})
-	require.Nil(t, produceResp, "response must be nil by unauthed produce")
-	gotCode := status.Code(err)
-	wantCode := codes.PermissionDenied
-	require.Equal(t, gotCode, wantCode, "unauthorized error not expected")
+	// ---- unary ----
+	{
+		// produce
+		produceResp, err := nobodyClient.Produce(ctx, &api.ProduceRequest{
+			Record: &api.Record{Value: []byte("helloworld")},
+		})
+		require.Nil(t, produceResp,
+			"response must be nil by unauthed produce")
+		require.Equal(t,
+			codes.PermissionDenied, status.Code(err),
+			"unauthorized error not expected")
 
-	// ---- consume ----
-	consumeResp, err := nobodyClient.Consume(ctx, &api.ConsumeRequest{
-		Offset: 0,
-	})
-	require.Nil(t, consumeResp, "response must be nil by unauthed consume")
-	gotCode = status.Code(err)
-	wantCode = codes.PermissionDenied
-	require.Equal(t, gotCode, wantCode, "unauthorized error not expected")
+		// consume
+		consumeResp, err := nobodyClient.Consume(ctx, &api.ConsumeRequest{
+			Offset: 0,
+		})
+		require.Nil(t, consumeResp,
+			"response must be nil by unauthed consume")
+		require.Equal(t,
+			codes.PermissionDenied, status.Code(err),
+			"unauthorized error not expected")
+	}
+	// ---- stream ----
+	{
+		// produce
+		produceStream, err := nobodyClient.ProduceStream(ctx)
+		_, err = produceStream.Recv()
+		require.Error(t, err, "unauthed produceStream recv is not error")
+		require.Equal(
+			t,
+			codes.PermissionDenied,
+			status.Code(err),
+			"ProduceStream error code not expected",
+		)
+
+		// consume
+		consumeStream, err := nobodyClient.ConsumeStream(
+			ctx,
+			&api.ConsumeStreamRequest{Offset: 0},
+		)
+		_, err = consumeStream.Recv()
+		require.Error(t, err, "unauthed consumeStream recv shuold return err")
+		require.Equal(
+			t,
+			codes.PermissionDenied,
+			status.Code(err),
+			"ConsumeStream error code not expected",
+		)
+	}
 }
 
 func testProduceConsume(t *testing.T, clientList *serviceClientList, config *Config) {

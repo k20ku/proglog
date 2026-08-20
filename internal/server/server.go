@@ -24,6 +24,46 @@ type grpcServer struct {
 
 var _ api.LogServiceServer = (*grpcServer)(nil)
 
+// authenticate is an interceptor that reads the subject out of the client's cert
+// and write it to the RPC's context.
+// With this interceptor, you can intercept and modify the execution
+// of each RPC's call.
+func authenticate(ctx context.Context) (context.Context, error) {
+	peer, ok := peer.FromContext(ctx)
+	if !ok {
+		return ctx, status.Error(
+			codes.Unknown,
+			"couldn't find peer info",
+		)
+	}
+	if peer.AuthInfo == nil {
+		return context.WithValue(ctx, subjectContextKey{}, ""), nil
+	}
+	tlsInfo, ok := peer.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return context.WithValue(ctx, subjectContextKey{}, ""), nil
+	}
+	uris := tlsInfo.State.VerifiedChains[0][0].URIs
+	if len(uris) == 0 {
+		return ctx, status.Error(
+			codes.InvalidArgument,
+			"length of URIs is 0.",
+		)
+	}
+	uri := uris[0]
+	paths := strings.Split(uri.Path, "/")
+	subject := paths[len(paths)-1]
+	ctx = context.WithValue(ctx, subjectContextKey{}, subject)
+
+	return ctx, nil
+}
+
+func subject(ctx context.Context) string {
+	return ctx.Value(subjectContextKey{}).(string)
+}
+
+type subjectContextKey struct{}
+
 func NewGRPCServer(config *Config, ops ...grpc.ServerOption) (
 	*grpc.Server,
 	error,
@@ -88,6 +128,13 @@ func (s *grpcServer) Consume(ctx context.Context, req *api.ConsumeRequest) (
 }
 
 func (s *grpcServer) ProduceStream(stream api.LogService_ProduceStreamServer) error {
+	if err := s.Authorizer.Authorize(
+		subject(stream.Context()),
+		actionProduce,
+		objectLogs,
+	); err != nil {
+		return err
+	}
 	for {
 		req, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -95,13 +142,7 @@ func (s *grpcServer) ProduceStream(stream api.LogService_ProduceStreamServer) er
 		} else if err != nil {
 			return status.Errorf(codes.Internal, "failed to receive record")
 		}
-		if err := s.Authorizer.Authorize(
-			subject(stream.Context()),
-			actionProduce,
-			objectLogs,
-		); err != nil {
-			return err
-		}
+
 		offset, err := s.CommitLog.Append(req.Record)
 		if err != nil {
 			return err
@@ -121,6 +162,13 @@ func (s *grpcServer) ConsumeStream(
 	req *api.ConsumeStreamRequest,
 	stream api.LogService_ConsumeStreamServer,
 ) error {
+	if err := s.Authorizer.Authorize(
+		subject(stream.Context()),
+		actionConsume,
+		objectLogs,
+	); err != nil {
+		return err
+	}
 	for {
 		// Continue reading until stream stops flowing.
 		// request specifies first offset to be incrementally read to
@@ -128,13 +176,6 @@ func (s *grpcServer) ConsumeStream(
 		case <-stream.Context().Done():
 			return nil
 		default:
-			if err := s.Authorizer.Authorize(
-				subject(stream.Context()),
-				actionConsume,
-				objectLogs,
-			); err != nil {
-				return err
-			}
 			record, err := s.CommitLog.Read(req.Offset)
 			if err != nil {
 				if _, ok := errors.AsType[ErrOffsetOutOfRange](err); ok {
@@ -145,52 +186,9 @@ func (s *grpcServer) ConsumeStream(
 			if err := stream.Send(
 				&api.ConsumeStreamResponse{Record: record},
 			); err != nil {
-				log.Fatalf("failed to Send: %v", err)
 				return status.Error(codes.Internal, "Failed to Send Response")
 			}
 			req.Offset++
 		}
 	}
 }
-
-// authenticate is an interceptor that reads the subject out of the client's cert
-// and write it to the RPC's context.
-// With this interceptor, you can intercept and modify the execution
-// of each RPC's call.
-func authenticate(ctx context.Context) (context.Context, error) {
-	peer, ok := peer.FromContext(ctx)
-	if !ok {
-		return ctx, status.Error(
-			codes.Unknown,
-			"couldn't find peer info",
-		)
-	}
-	if peer.AuthInfo == nil {
-		return context.WithValue(ctx, subjectContextKey{}, ""), nil
-	}
-	tlsInfo, ok := peer.AuthInfo.(credentials.TLSInfo)
-	if !ok {
-		return context.WithValue(ctx, subjectContextKey{}, ""), nil
-	}
-	uris := tlsInfo.State.VerifiedChains[0][0].URIs
-	if len(uris) == 0 {
-		return ctx, status.Error(
-			codes.InvalidArgument,
-			"length of URIs is 0.",
-		)
-	}
-	uri := uris[0]
-	fmt.Printf("san=%+v\n", uri)
-	paths := strings.Split(uri.Path, "/")
-	fmt.Printf("paths=%+v\n", paths)
-	subject := paths[len(paths)-1]
-	ctx = context.WithValue(ctx, subjectContextKey{}, subject)
-
-	return ctx, nil
-}
-
-func subject(ctx context.Context) string {
-	return ctx.Value(subjectContextKey{}).(string)
-}
-
-type subjectContextKey struct{}
