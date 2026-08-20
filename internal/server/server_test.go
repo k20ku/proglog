@@ -2,26 +2,13 @@ package server
 
 import (
 	"context"
-	"fmt"
-	"net"
 	"testing"
 
 	api "github.com/k20ku/proglog/gen/go/log/v1"
-	"github.com/k20ku/proglog/internal/config"
-	"github.com/k20ku/proglog/internal/log"
-	"github.com/k20ku/proglog/internal/testdata"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/errgroup"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 )
-
-type serviceClientList struct {
-	AdminClient  api.LogServiceClient
-	NobodyClient api.LogServiceClient
-}
 
 func TestServer(t *testing.T) {
 	senarios := map[string]func(
@@ -32,104 +19,37 @@ func TestServer(t *testing.T) {
 		"produce/consume a message to/from the log succeeds": testProduceConsume,
 		"consume past log boundary fails":                    testConsumePastBoundary,
 		"produce/consume stream succeeds":                    testProduceConsumeStream,
+		"test unauthorized client":                           testUnauthorized,
 	}
 
 	for senario, fn := range senarios {
 		t.Run(senario, func(t *testing.T) {
-			clientList, config, teardown := setupTest(t, nil)
+			clientList, config, teardown := clientSetupTest(t, nil)
 			t.Cleanup(teardown)
 			fn(t, clientList, config)
 		})
 	}
 }
 
-func setupTest(t *testing.T, fn func(*Config)) (
-	clientList *serviceClientList,
-	cfg *Config,
-	teardown func(),
-) {
-	t.Helper()
-
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err, "listen on port 0")
-
-	// ---- commit log ----
-	dir := t.TempDir()
-	wlog, err := log.NewLog(dir, log.NewConfig())
-	require.NoErrorf(t, err, "new log at %d", dir)
-	clog := NewWalCommitLog(wlog)
-	require.Implements(t, (*CommitLog)(nil), clog, "log does not implement commitlog")
-	cfg = &Config{
-		CommitLog: clog,
-	}
-	if fn != nil {
-		fn(cfg)
-	}
-
-	// ---- server TLS ----
-	serverTLSConfig, err := config.SetupTLSConfig(config.TLSConfig{
-		CACertFile:    testdata.CACertFile,
-		KeyFile:       testdata.ServerKeyFile,
-		CertFile:      testdata.ServerCertFile,
-		Server:        true,
-		ServerAddress: l.Addr().String(),
+func testUnauthorized(t *testing.T, clientList *serviceClientList, config *Config) {
+	ctx := context.Background()
+	nobodyClient := clientList.NobodyClient
+	produceResp, err := nobodyClient.Produce(ctx, &api.ProduceRequest{
+		Record: &api.Record{Value: []byte("helloworld")},
 	})
-	require.NoError(t, err, "client setup tls failed")
+	require.Nil(t, produceResp, "response must be nil by unauthed produce")
+	gotCode := status.Code(err)
+	wantCode := codes.PermissionDenied
+	require.Equal(t, gotCode, wantCode, "unauthorized error not expected")
 
-	serverCreds := credentials.NewTLS(serverTLSConfig)
-	server, err := NewGRPCServer(cfg, grpc.Creds(serverCreds))
-	require.NoError(t, err, "new gRPC server")
-
-	// TODO: review scope of context
-	eg, _ := errgroup.WithContext(t.Context())
-	eg.Go(func() error {
-		err := server.Serve(l)
-		if err != nil {
-			return fmt.Errorf("server serve: %w", err)
-		}
-		return nil
+	// ---- consume ----
+	consumeResp, err := nobodyClient.Consume(ctx, &api.ConsumeRequest{
+		Offset: 0,
 	})
-
-	// ---- client TLS ----
-	newClient := func(certPath, keyPath string) (
-		*grpc.ClientConn,
-		api.LogServiceClient,
-		[]grpc.DialOption,
-	) {
-		clientTLSConfig, err := config.SetupTLSConfig(config.TLSConfig{
-			CACertFile: testdata.CACertFile,
-			CertFile:   certPath,
-			KeyFile:    keyPath,
-			Server:     false,
-		})
-		require.NoError(t, err, "setup client tls failed")
-		clientCreds := credentials.NewTLS(clientTLSConfig)
-		ops := []grpc.DialOption{grpc.WithTransportCredentials(clientCreds)}
-		conn, err := grpc.NewClient(l.Addr().String(), ops...)
-		require.NoErrorf(t, err, "new client %s", l.Addr().String())
-		client := api.NewLogServiceClient(conn)
-		return conn, client, ops
-	}
-
-	adminConn, adminClient, _ := newClient(
-		testdata.AdminCertFile,
-		testdata.AdminKeyFile,
-	)
-
-	nobodyConn, nobodyClient, _ := newClient(
-		testdata.AdminCertFile,
-		testdata.AdminKeyFile,
-	)
-	return &serviceClientList{
-			AdminClient:  adminClient,
-			NobodyClient: nobodyClient,
-		}, cfg, func() {
-			server.Stop()
-			_ = adminConn.Close()
-			_ = nobodyConn.Close()
-			_ = l.Close()
-			_ = wlog.Close()
-		}
+	require.Nil(t, consumeResp, "response must be nil by unauthed consume")
+	gotCode = status.Code(err)
+	wantCode = codes.PermissionDenied
+	require.Equal(t, gotCode, wantCode, "unauthorized error not expected")
 }
 
 func testProduceConsume(t *testing.T, clientList *serviceClientList, config *Config) {

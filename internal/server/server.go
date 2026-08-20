@@ -6,10 +6,14 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 
+	grpcauth "github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/auth"
 	api "github.com/k20ku/proglog/gen/go/log/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -24,6 +28,14 @@ func NewGRPCServer(config *Config, ops ...grpc.ServerOption) (
 	*grpc.Server,
 	error,
 ) {
+	ops = append(ops,
+		grpc.ChainStreamInterceptor(
+			grpcauth.StreamServerInterceptor(authenticate),
+		),
+		grpc.ChainUnaryInterceptor(
+			grpcauth.UnaryServerInterceptor(authenticate),
+		),
+	)
 	gsrv := grpc.NewServer(ops...)
 	srv, err := newgrpcServer(config)
 	if err != nil {
@@ -44,7 +56,14 @@ func newgrpcServer(config *Config) (srv *grpcServer, err error) {
 func (s *grpcServer) Produce(ctx context.Context, req *api.ProduceRequest) (
 	*api.ProduceResponse, error,
 ) {
-	offset, err := s.appendRecord(req.Record)
+	if err := s.Authorizer.Authorize(
+		subject(ctx),
+		actionProduce,
+		objectLogs,
+	); err != nil {
+		return nil, err
+	}
+	offset, err := s.CommitLog.Append(req.Record)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +73,14 @@ func (s *grpcServer) Produce(ctx context.Context, req *api.ProduceRequest) (
 func (s *grpcServer) Consume(ctx context.Context, req *api.ConsumeRequest) (
 	*api.ConsumeResponse, error,
 ) {
-	record, err, _ := s.readRecord(req.Offset)
+	if err := s.Authorizer.Authorize(
+		subject(ctx),
+		actionConsume,
+		objectLogs,
+	); err != nil {
+		return nil, err
+	}
+	record, err := s.CommitLog.Read(req.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +95,14 @@ func (s *grpcServer) ProduceStream(stream api.LogService_ProduceStreamServer) er
 		} else if err != nil {
 			return status.Errorf(codes.Internal, "failed to receive record")
 		}
-		offset, err := s.appendRecord(req.Record)
+		if err := s.Authorizer.Authorize(
+			subject(stream.Context()),
+			actionProduce,
+			objectLogs,
+		); err != nil {
+			return err
+		}
+		offset, err := s.CommitLog.Append(req.Record)
 		if err != nil {
 			return err
 		}
@@ -95,12 +128,19 @@ func (s *grpcServer) ConsumeStream(
 		case <-stream.Context().Done():
 			return nil
 		default:
-			record, err, outOfRange := s.readRecord(req.Offset)
+			if err := s.Authorizer.Authorize(
+				subject(stream.Context()),
+				actionConsume,
+				objectLogs,
+			); err != nil {
+				return err
+			}
+			record, err := s.CommitLog.Read(req.Offset)
 			if err != nil {
-				if !outOfRange {
-					return err
+				if _, ok := errors.AsType[ErrOffsetOutOfRange](err); ok {
+					continue
 				}
-				continue
+				return err
 			}
 			if err := stream.Send(
 				&api.ConsumeStreamResponse{Record: record},
@@ -113,32 +153,44 @@ func (s *grpcServer) ConsumeStream(
 	}
 }
 
-// It wraps non-nil errors with gRPC status code and message.
-func (s *grpcServer) appendRecord(
-	record *api.Record,
-) (offset uint64, err error) {
-	offset, err = s.CommitLog.Append(record)
-	if err != nil {
-		return 0, status.Error(codes.Internal, "Append the Record failed")
+// authenticate is an interceptor that reads the subject out of the client's cert
+// and write it to the RPC's context.
+// With this interceptor, you can intercept and modify the execution
+// of each RPC's call.
+func authenticate(ctx context.Context) (context.Context, error) {
+	peer, ok := peer.FromContext(ctx)
+	if !ok {
+		return ctx, status.Error(
+			codes.Unknown,
+			"couldn't find peer info",
+		)
 	}
-	return offset, nil
+	if peer.AuthInfo == nil {
+		return context.WithValue(ctx, subjectContextKey{}, ""), nil
+	}
+	tlsInfo, ok := peer.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return context.WithValue(ctx, subjectContextKey{}, ""), nil
+	}
+	uris := tlsInfo.State.VerifiedChains[0][0].URIs
+	if len(uris) == 0 {
+		return ctx, status.Error(
+			codes.InvalidArgument,
+			"length of URIs is 0.",
+		)
+	}
+	uri := uris[0]
+	fmt.Printf("san=%+v\n", uri)
+	paths := strings.Split(uri.Path, "/")
+	fmt.Printf("paths=%+v\n", paths)
+	subject := paths[len(paths)-1]
+	ctx = context.WithValue(ctx, subjectContextKey{}, subject)
+
+	return ctx, nil
 }
 
-// If read failed with ErrOffsetOutOfRange, returns isOutOfRange with true and corresponding error.
-// It wraps non-nil error with gRPC status code and message.
-func (s *grpcServer) readRecord(
-	offset uint64,
-) (record *api.Record, err error, isOutOfRange bool) {
-	record, err = s.CommitLog.Read(offset)
-	if err != nil {
-		if _, ok := errors.AsType[ErrOffsetOutOfRange](err); ok {
-			return nil, err, ok
-		}
-		return nil,
-			status.Error(
-				codes.Internal, "Internal Server Error",
-			),
-			false
-	}
-	return record, nil, false
+func subject(ctx context.Context) string {
+	return ctx.Value(subjectContextKey{}).(string)
 }
+
+type subjectContextKey struct{}
