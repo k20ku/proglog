@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"testing"
@@ -11,6 +12,9 @@ import (
 	"github.com/k20ku/proglog/internal/log"
 	"github.com/k20ku/proglog/internal/testdata"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -28,6 +32,7 @@ func clientSetupTest(t *testing.T, fn func(*Config)) (
 ) {
 	t.Helper()
 
+	ctx := t.Context()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err, "listen on port 0")
 
@@ -37,15 +42,38 @@ func clientSetupTest(t *testing.T, fn func(*Config)) (
 	require.NoErrorf(t, err, "new log at %d", dir)
 	clog := NewWalCommitLog(wlog)
 	require.Implements(t, (*CommitLog)(nil), clog, "log does not implement commitlog")
+
+	// ---- ACL authorizer ----
 	authorizer, err := auth.New(testdata.ACLModelFile, testdata.ACLPolicyFile)
 	require.NoError(t, err, "failed to new authorozer ACLModelFile=%q, ACLPolicyFile=%q", testdata.ACLModelFile, testdata.ACLPolicyFile)
 	aclAuth := NewACLAuthorizer(authorizer)
+
 	cfg = &Config{
+		Logger:     logger,
 		CommitLog:  clog,
 		Authorizer: aclAuth,
 	}
 	if fn != nil {
 		fn(cfg)
+	}
+
+	// ---- exporter ----
+	var tp *sdktrace.TracerProvider
+	if *debug {
+		// TODO: CA certificate to authenticate OTLS server
+		exporter, err := otlptracegrpc.New(
+			ctx,
+			otlptracegrpc.WithInsecure(),
+		)
+		if err != nil {
+			t.Fatal("export OTLP failed")
+		}
+
+		tp = sdktrace.NewTracerProvider(
+			sdktrace.WithBatcher(exporter),
+			sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		)
+		otel.SetTracerProvider(tp)
 	}
 
 	// ---- server TLS ----
@@ -63,7 +91,7 @@ func clientSetupTest(t *testing.T, fn func(*Config)) (
 	require.NoError(t, err, "new gRPC server")
 
 	// TODO: review scope of context
-	eg, _ := errgroup.WithContext(t.Context())
+	eg, _ := errgroup.WithContext(ctx)
 	eg.Go(func() error {
 		err := server.Serve(l)
 		if err != nil {
@@ -113,5 +141,8 @@ func clientSetupTest(t *testing.T, fn func(*Config)) (
 			_ = nobodyConn.Close()
 			_ = l.Close()
 			_ = wlog.Close()
+			if tp != nil {
+				_ = tp.Shutdown(context.Background())
+			}
 		}
 }

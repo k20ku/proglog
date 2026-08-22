@@ -2,13 +2,31 @@ package server
 
 import (
 	"context"
+	"flag"
+	"log/slog"
+	"os"
 	"testing"
 
 	api "github.com/k20ku/proglog/gen/go/log/v1"
 	"github.com/stretchr/testify/require"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+var (
+	debug  = flag.Bool("debug", false, "Enable observability for debugging.")
+	logger = slog.New(slog.DiscardHandler)
+)
+
+// NOTE: at internal/server directory, run `go test -v -debug=true`
+func TestMain(m *testing.M) {
+	flag.Parse()
+	if *debug {
+		logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{}))
+	}
+	os.Exit(m.Run())
+}
 
 func TestServer(t *testing.T) {
 	senarios := map[string]func(

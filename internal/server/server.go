@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"strings"
 
 	grpcauth "github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/auth"
+	logging "github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/logging"
 	api "github.com/k20ku/proglog/gen/go/log/v1"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -64,17 +67,40 @@ func subject(ctx context.Context) string {
 
 type subjectContextKey struct{}
 
+// InterceptorLogger adapts slog logger to interceptor logger.
+func InterceptorLogger(l *slog.Logger) logging.Logger {
+	return logging.LoggerFunc(func(ctx context.Context, lvl logging.Level, msg string, fields ...any) {
+		l.Log(ctx, slog.Level(lvl), msg, fields...)
+	})
+}
+
 func NewGRPCServer(config *Config, ops ...grpc.ServerOption) (
 	*grpc.Server,
 	error,
 ) {
+	// logging
+	logger := config.Logger
+	opts := []logging.Option{
+		logging.WithDurationField(
+			logging.DurationToDurationField,
+		),
+	}
+
 	ops = append(ops,
 		grpc.ChainStreamInterceptor(
 			grpcauth.StreamServerInterceptor(authenticate),
+			logging.StreamServerInterceptor(
+				InterceptorLogger(logger), opts...,
+			),
 		),
 		grpc.ChainUnaryInterceptor(
 			grpcauth.UnaryServerInterceptor(authenticate),
+			logging.UnaryServerInterceptor(
+				InterceptorLogger(logger),
+				opts...,
+			),
 		),
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 	)
 	gsrv := grpc.NewServer(ops...)
 	srv, err := newgrpcServer(config)

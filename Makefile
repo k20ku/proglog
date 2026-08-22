@@ -90,6 +90,22 @@ gencert-client:
 		--no-password --insecure \
 		--bundle -f \
 
+.PHONY: gencert-otel-collector
+gencert-otel-collector:
+	step certificate create \
+		--profile leaf \
+		"OpenTelemetory Collector" \
+		$(CERT_DIR)/otel-collector.crt \
+		$(CERT_DIR)/otel-collector.key \
+		--not-after=8760h \
+		--san localhost \
+		--san 127.0.0.1 \
+		--san spiffe://proglog/workload/otel-collector \
+		--ca $(CERT_DIR)/ca.pem \
+		--ca-key $(CERT_DIR)/ca.key \
+		--no-password --insecure \
+		--bundle -f \
+
 .PHONY: help 
 help: ## Show options
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \

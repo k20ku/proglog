@@ -1,6 +1,8 @@
 package server
 
 import (
+	"log/slog"
+
 	api "github.com/k20ku/proglog/gen/go/log/v1"
 )
 
@@ -11,6 +13,7 @@ const (
 )
 
 type Config struct {
+	Logger     *slog.Logger
 	CommitLog  CommitLog
 	Authorizer Authorizer
 }
