@@ -2,96 +2,97 @@ package server
 
 import (
 	"context"
-	"fmt"
-	"net"
 	"testing"
 
 	api "github.com/k20ku/proglog/gen/go/log/v1"
-	"github.com/k20ku/proglog/internal/log"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/sync/errgroup"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
 func TestServer(t *testing.T) {
 	senarios := map[string]func(
 		t *testing.T,
-		client api.LogServiceClient,
+		clientList *serviceClientList,
 		config *Config,
 	){
 		"produce/consume a message to/from the log succeeds": testProduceConsume,
 		"consume past log boundary fails":                    testConsumePastBoundary,
 		"produce/consume stream succeeds":                    testProduceConsumeStream,
+		"test unauthorized client":                           testUnauthorized,
 	}
 
 	for senario, fn := range senarios {
 		t.Run(senario, func(t *testing.T) {
-			client, config, teardown := setupTest(t, nil)
+			clientList, config, teardown := clientSetupTest(t, nil)
 			t.Cleanup(teardown)
-			fn(t, client, config)
+			fn(t, clientList, config)
 		})
 	}
 }
 
-func setupTest(t *testing.T, fn func(*Config)) (
-	client api.LogServiceClient,
-	config *Config,
-	teardown func(),
-) {
-	t.Helper()
+func testUnauthorized(t *testing.T, clientList *serviceClientList, config *Config) {
+	ctx := context.Background()
+	nobodyClient := clientList.NobodyClient
+	// ---- unary ----
+	{
+		// produce
+		produceResp, err := nobodyClient.Produce(ctx, &api.ProduceRequest{
+			Record: &api.Record{Value: []byte("helloworld")},
+		})
+		require.Nil(t, produceResp,
+			"response must be nil by unauthed produce")
+		require.Equal(t,
+			codes.PermissionDenied, status.Code(err),
+			"unauthorized error not expected")
 
-	l, err := net.Listen("tcp", ":0")
-	require.NoError(t, err, "listen on port 0")
-
-	clientOptions := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
-	cc, err := grpc.NewClient(l.Addr().String(), clientOptions...)
-	require.NoErrorf(t, err, "new client %s", l.Addr().String())
-
-	dir := t.TempDir()
-
-	wlog, err := log.NewLog(dir, log.NewConfig())
-	require.NoErrorf(t, err, "new log at %d", dir)
-
-	clog := NewWalCommitLog(wlog)
-	require.Implements(t, (*CommitLog)(nil), clog, "log does not implement commitlog")
-	config = &Config{
-		CommitLog: clog,
+		// consume
+		consumeResp, err := nobodyClient.Consume(ctx, &api.ConsumeRequest{
+			Offset: 0,
+		})
+		require.Nil(t, consumeResp,
+			"response must be nil by unauthed consume")
+		require.Equal(t,
+			codes.PermissionDenied, status.Code(err),
+			"unauthorized error not expected")
 	}
+	// ---- stream ----
+	{
+		// produce
+		produceStream, err := nobodyClient.ProduceStream(ctx)
+		_, err = produceStream.Recv()
+		require.Error(t, err, "unauthed produceStream recv is not error")
+		require.Equal(
+			t,
+			codes.PermissionDenied,
+			status.Code(err),
+			"ProduceStream error code not expected",
+		)
 
-	if fn != nil {
-		fn(config)
-	}
-	server, err := NewGRPCServer(config)
-	require.NoError(t, err, "new gRPC server")
-
-	// TODO: review scope of context
-	eg, _ := errgroup.WithContext(t.Context())
-	eg.Go(func() error {
-		err := server.Serve(l)
-		if err != nil {
-			return fmt.Errorf("server serve: %w", err)
-		}
-		return nil
-	})
-
-	client = api.NewLogServiceClient(cc)
-	return client, config, func() {
-		server.Stop()
-		_ = cc.Close()
-		_ = l.Close()
-		_ = wlog.Close()
+		// consume
+		consumeStream, err := nobodyClient.ConsumeStream(
+			ctx,
+			&api.ConsumeStreamRequest{Offset: 0},
+		)
+		_, err = consumeStream.Recv()
+		require.Error(t, err, "unauthed consumeStream recv shuold return err")
+		require.Equal(
+			t,
+			codes.PermissionDenied,
+			status.Code(err),
+			"ConsumeStream error code not expected",
+		)
 	}
 }
-func testProduceConsume(t *testing.T, client api.LogServiceClient, config *Config) {
+
+func testProduceConsume(t *testing.T, clientList *serviceClientList, config *Config) {
 	ctx := context.Background()
 
 	want := &api.Record{
 		Value: []byte("Hello Proglog"),
 	}
 
+	client := clientList.AdminClient
 	produceRsp, err := client.Produce(
 		ctx,
 		&api.ProduceRequest{
@@ -110,11 +111,12 @@ func testProduceConsume(t *testing.T, client api.LogServiceClient, config *Confi
 
 func testConsumePastBoundary(
 	t *testing.T,
-	client api.LogServiceClient,
+	clientList *serviceClientList,
 	_ *Config,
 ) {
 	ctx := context.Background()
 
+	client := clientList.AdminClient
 	produce, err := client.Produce(ctx, &api.ProduceRequest{
 		Record: &api.Record{
 			Value: []byte("hello world"),
@@ -133,7 +135,7 @@ func testConsumePastBoundary(
 
 func testProduceConsumeStream(
 	t *testing.T,
-	client api.LogServiceClient,
+	clientList *serviceClientList,
 	config *Config,
 ) {
 	ctx := context.Background()
@@ -147,6 +149,8 @@ func testProduceConsumeStream(
 			Offset: 1,
 		},
 	}
+
+	client := clientList.AdminClient
 
 	{
 		stream, err := client.ProduceStream(ctx)

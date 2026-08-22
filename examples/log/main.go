@@ -67,11 +67,11 @@ func main() {
 	offset := flag.Uint64("offset", 0, "a uint64: offset at which you want to read")
 	flag.Parse()
 
-	cfg, err := NewConfig()
+	home, err := os.UserHomeDir()
 	if err != nil {
 		log.Fatal(err)
 	}
-	dir := path.Join(cfg.ExamplesDir, "log", "data")
+	dir := path.Join(home, ".proglog", "example", "log", "wal-log")
 	fmt.Print("log data dir: ", dir)
 
 	if *trunc {
