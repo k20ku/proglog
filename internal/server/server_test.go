@@ -61,6 +61,7 @@ func clientSetupTest(t *testing.T, fn func(*Config)) (
 	wlog, err := log.NewLog(dir, log.NewConfig())
 	require.NoErrorf(t, err, "new log at %d", dir)
 	clog := NewWalCommitLog(wlog)
+	// TODO: assert in compile time
 	require.Implements(t, (*CommitLog)(nil), clog, "log does not implement commitlog")
 
 	// ---- ACL authorizer ----
@@ -80,7 +81,6 @@ func clientSetupTest(t *testing.T, fn func(*Config)) (
 	// ---- exporter ----
 	var tp *sdktrace.TracerProvider
 	if *debug {
-		// TODO: CA certificate to authenticate OTLS server
 		exporter, err := otlptracegrpc.New(
 			ctx,
 			otlptracegrpc.WithInsecure(),
