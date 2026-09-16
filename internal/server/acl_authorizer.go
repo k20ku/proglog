@@ -14,7 +14,7 @@ type aclAuthorizer struct {
 	a *auth.Authorizer
 }
 
-func NewACLAuthorizer(a *auth.Authorizer) *aclAuthorizer {
+func NewACLAuthorizer(a *auth.Authorizer) Authorizer {
 	return &aclAuthorizer{a: a}
 }
 func (aclAuth *aclAuthorizer) Authorize(subject, action, object string) error {
