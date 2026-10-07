@@ -14,14 +14,18 @@ type Replicator struct {
 	DialOptions []grpc.DialOption
 	LocalServer api.LogServiceClient
 
-	logger *slog.Logger
+	Logger *slog.Logger
 
-	mu      sync.Mutex
-	servers map[string]chan struct{}
-	closed  bool
-	close   chan struct{}
+	mu               sync.Mutex
+	serverLeaveChans map[string]chan struct{}
+	closed           bool
+	close            chan struct{}
 }
 
+// Joins the member that has a name and addr
+// why does Join do replication? Only Jeffery knows...
+// Join starts replication to local log server in another goroutine and
+// returns nil whether or not replication succeed.
 func (r *Replicator) Join(name, addr string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -31,19 +35,19 @@ func (r *Replicator) Join(name, addr string) error {
 		return nil
 	}
 
-	if _, ok := r.servers[name]; ok {
+	if _, ok := r.serverLeaveChans[name]; ok {
 		// already replicating so skip
 		return nil
 	}
-	r.servers[name] = make(chan struct{})
+	r.serverLeaveChans[name] = make(chan struct{})
 
-	// r.servers[name] : leave channel of server name
-	go r.replicate(addr, r.servers[name])
+	go r.replicate(addr, r.serverLeaveChans[name])
 
 	return nil
 }
 
 func (r *Replicator) replicate(addr string, leave chan struct{}) {
+	// build gRPC channel to remote server
 	conn, err := grpc.NewClient(addr, r.DialOptions...)
 	if err != nil {
 		r.logError(err, "failed to dial", addr)
@@ -67,7 +71,8 @@ func (r *Replicator) replicate(addr string, leave chan struct{}) {
 	}
 
 	records := make(chan *api.Record)
-	// producer
+	// producer produce records from another server.
+	// executed in another goroutine
 	go func() {
 		for {
 			recv, err := stream.Recv()
@@ -80,6 +85,7 @@ func (r *Replicator) replicate(addr string, leave chan struct{}) {
 	}()
 
 	// consumer
+	// wait for producer
 	for {
 		select {
 		case <-r.close:
@@ -103,20 +109,20 @@ func (r *Replicator) Leave(name string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.init()
-	if _, ok := r.servers[name]; !ok {
+	if _, ok := r.serverLeaveChans[name]; !ok {
 		return nil
 	}
-	close(r.servers[name])
-	delete(r.servers, name)
+	close(r.serverLeaveChans[name])
+	delete(r.serverLeaveChans, name)
 	return nil
 }
 
 func (r *Replicator) init() {
-	if r.logger == nil {
-		r.logger = slog.Default().WithGroup("replicator")
+	if r.Logger == nil {
+		r.Logger = slog.Default().WithGroup("replicator")
 	}
-	if r.servers == nil {
-		r.servers = make(map[string]chan struct{})
+	if r.serverLeaveChans == nil {
+		r.serverLeaveChans = make(map[string]chan struct{})
 	}
 	if r.close == nil {
 		r.close = make(chan struct{})
@@ -137,7 +143,7 @@ func (r *Replicator) Close() error {
 }
 
 func (r *Replicator) logError(err error, msg, addr string) {
-	r.logger.Error(
+	r.Logger.Error(
 		msg,
 		slog.String("addr", addr),
 		slog.String("error", err.Error()),

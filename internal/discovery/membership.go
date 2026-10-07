@@ -8,6 +8,12 @@ import (
 	"github.com/hashicorp/serf/serf"
 )
 
+type Tag string
+
+const (
+	RPC_ADDR Tag = "rpc_addr"
+)
+
 type Membership struct {
 	Config
 	handler Handler
@@ -16,7 +22,8 @@ type Membership struct {
 	logger  *slog.Logger
 }
 
-func New(handler Handler, config Config) (*Membership, error) {
+// oh my gosh NewMembership start serf's gossip!
+func NewMembership(handler Handler, config Config) (*Membership, error) {
 	c := &Membership{
 		Config:  config,
 		handler: handler,
@@ -31,7 +38,7 @@ func New(handler Handler, config Config) (*Membership, error) {
 type Config struct {
 	NodeName       string
 	BindAddr       string
-	Tags           map[string]string
+	Tags           map[Tag]string
 	StartJoinAddrs []string
 }
 
@@ -48,7 +55,11 @@ func (m *Membership) setupSerf() (err error) {
 
 	events := make(chan serf.Event)
 	config.EventCh = events
-	config.Tags = m.Tags
+	tags := make(map[string]string, len(m.Tags))
+	for tag, val := range m.Tags {
+		tags[string(tag)] = val
+	}
+	config.Tags = tags
 	config.NodeName = m.Config.NodeName
 
 	// ---- membership setup

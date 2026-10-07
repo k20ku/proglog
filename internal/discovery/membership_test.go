@@ -40,8 +40,8 @@ func setupMember(t *testing.T, members []*Membership) (
 	id := len(members)
 	ports := dynaport.Get(1)
 	addr := fmt.Sprintf("%s:%d", "127.0.0.1", ports[0])
-	tags := map[string]string{
-		"rpc_addr": addr,
+	tags := map[Tag]string{
+		RPC_ADDR: addr,
 	}
 	c := Config{
 		NodeName: fmt.Sprintf("%d", id),
@@ -57,7 +57,7 @@ func setupMember(t *testing.T, members []*Membership) (
 			members[0].BindAddr,
 		}
 	}
-	m, err := New(h, c)
+	m, err := NewMembership(h, c)
 	require.NoError(t, err)
 	members = append(members, m)
 	return members, h

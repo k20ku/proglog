@@ -25,6 +25,7 @@ type Agent struct {
 
 	// コンポーネントはlogやserverなどである
 	// START: components
+	Logger     *slog.Logger
 	log        *log.Log
 	server     *grpc.Server
 	membership *discovery.Membership
@@ -77,7 +78,7 @@ func New(config Config) (*Agent, error) {
 
 func (a *Agent) setupLogger() error {
 	// TODO: logger
-	_ = slog.Default().WithGroup("agent")
+	logger := slog.Default().WithGroup("agent")
 	return nil
 }
 
@@ -87,7 +88,7 @@ func (a *Agent) setupLog() error {
 		a.Config.DataDir,
 		log.NewConfig(),
 	)
-	return err
+	return fmt.Errorf("agent setup log to %s: %w", a.Config.DataDir, err)
 }
 
 func (a *Agent) setupServer() error {
@@ -97,12 +98,14 @@ func (a *Agent) setupServer() error {
 		a.Config.ACLPolicyFile,
 	)
 	if err != nil {
-		return err
+		return fmt.Errorf("")
 	}
+	aclAuth := server.NewACLAuthorizer(authorizer)
 	// TODO: wrapper
+	clog := server.NewWalCommitLog(a.log)
 	serverConfig := &server.Config{
-		CommitLog:  a.log,
-		Authorizer: authorizer,
+		CommitLog:  clog,
+		Authorizer: aclAuth,
 	}
 	var opts []grpc.ServerOption
 	if a.Config.ServerTLSConfig != nil {
