@@ -5,63 +5,95 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/consul/sdk/v2/freeport"
 	"github.com/hashicorp/serf/serf"
 	. "github.com/k20ku/proglog/internal/discovery"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/travisjeffery/go-dynaport"
 )
 
 func TestMembership(t *testing.T) {
-	ms, handler := setupMember(t, nil)
-	ms, _ = setupMember(t, ms)
-	ms, _ = setupMember(t, ms)
-
-	require.Eventually(t, func() bool {
-		return 2 == len(handler.joins) &&
-			3 == len(ms[0].Members()) &&
-			0 == len(handler.leaves)
-	}, 3*time.Second, 250*time.Millisecond)
-
-	require.NoError(t, ms[2].Leave())
-
-	require.Eventually(t, func() bool {
-		return 2 == len(handler.joins) &&
-			3 == len(ms[0].Members()) &&
-			serf.StatusLeft == ms[0].Members()[2].Status &&
-			1 == len(handler.leaves)
-	}, 3*time.Second, 250*time.Millisecond)
-
-	require.Equal(t, fmt.Sprintf("%d", 2), <-handler.leaves)
-}
-
-func setupMember(t *testing.T, members []*Membership) (
-	[]*Membership, *handler,
-) {
-	id := len(members)
-	ports := dynaport.Get(1)
-	addr := fmt.Sprintf("%s:%d", "127.0.0.1", ports[0])
-	tags := map[Tag]string{
-		RPC_ADDR: addr,
+	memberships := make([]*Membership, 3)
+	leaveJoinHandler := &handler{
+		joins:  make(chan map[string]string, 3),
+		leaves: make(chan string, 3),
 	}
-	c := Config{
-		NodeName: fmt.Sprintf("%d", id),
-		BindAddr: addr,
-		Tags:     tags,
+	ports := freeport.GetN(t, 3)
+	addrs := make([]string, 3)
+	for i, port := range ports {
+		addrs[i] = fmt.Sprintf("%s:%d", "127.0.0.1", port)
 	}
-	h := &handler{}
-	if len(members) == 0 {
-		h.joins = make(chan map[string]string, 3)
-		h.leaves = make(chan string, 3)
-	} else {
-		c.StartJoinAddrs = []string{
-			members[0].BindAddr,
+	leaderId := 0
+	for id := range 3 {
+		cfg := Config{
+			NodeName: fmt.Sprintf("node%d", id),
+			BindAddr: addrs[id],
+			Tags: map[Tag]string{
+				RPC_ADDR: addrs[id],
+			},
 		}
+		if id != leaderId {
+			cfg.StartJoinAddrs = []string{
+				addrs[leaderId],
+			}
+		}
+		m, err := NewMembership(leaveJoinHandler, cfg)
+		require.NoErrorf(t, err, "new membership at id(%d) failed", id)
+		memberships[id] = m
 	}
-	m, err := NewMembership(h, c)
-	require.NoError(t, err)
-	members = append(members, m)
-	return members, h
+
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		require.Equal(c,
+			3, len(memberships[leaderId].Members()),
+			"incollect num of all members",
+		)
+		require.Equal(c,
+			3, len(leaveJoinHandler.joins),
+			"incollect num of joined members",
+		)
+		require.Equal(c,
+			0,
+			len(leaveJoinHandler.leaves),
+			"incollect num of left members",
+		)
+	}, 1500*time.Millisecond, 250*time.Millisecond)
+
+	leftId := 3 - 1
+	require.NoErrorf(t,
+		memberships[leftId].Leave(),
+		"node%d failed to leave",
+		leftId,
+	)
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		require.Equalf(c,
+			serf.StatusLeft.String(),
+			memberships[leaderId].Members()[leftId].Status.String(),
+			"node%d is not StatusLeft",
+			leftId,
+		)
+		require.Equal(c,
+			3, len(memberships[leaderId].Members()),
+			"incollect num of all members",
+		)
+		require.Equal(c,
+			3, len(leaveJoinHandler.joins),
+			"incollect num of joined members",
+		)
+		require.Equal(c,
+			1,
+			len(leaveJoinHandler.leaves),
+			"incollect num of left members",
+		)
+	}, 3000*time.Millisecond, 250*time.Millisecond)
+
+	require.Equal(t,
+		fmt.Sprintf("node%d", leftId),
+		<-leaveJoinHandler.leaves,
+		"left id is incollect",
+	)
 }
+
+var _ Handler = &handler{}
 
 type handler struct {
 	joins  chan map[string]string

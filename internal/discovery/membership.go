@@ -24,15 +24,15 @@ type Membership struct {
 
 // oh my gosh NewMembership start serf's gossip!
 func NewMembership(handler Handler, config Config) (*Membership, error) {
-	c := &Membership{
+	membership := &Membership{
 		Config:  config,
 		handler: handler,
-		logger:  slog.Default(),
+		logger:  slog.Default().WithGroup("membership"),
 	}
-	if err := c.setupSerf(); err != nil {
+	if err := membership.startSerf(); err != nil {
 		return nil, err
 	}
-	return c, nil
+	return membership, nil
 }
 
 type Config struct {
@@ -42,7 +42,7 @@ type Config struct {
 	StartJoinAddrs []string
 }
 
-func (m *Membership) setupSerf() (err error) {
+func (m *Membership) startSerf() (err error) {
 	addr, err := net.ResolveTCPAddr("tcp", m.BindAddr)
 	if err != nil {
 		return err
@@ -68,7 +68,7 @@ func (m *Membership) setupSerf() (err error) {
 	if err != nil {
 		return err
 	}
-	go m.eventHandler()
+	go m.handleEvents()
 	if m.StartJoinAddrs != nil {
 		_, err = m.serf.Join(m.StartJoinAddrs, true)
 		if err != nil {
@@ -83,11 +83,12 @@ type Handler interface {
 	Leave(name string) error
 }
 
-func (m *Membership) eventHandler() {
+func (m *Membership) handleEvents() {
 	// event loop
 	for e := range m.events {
 		switch e.EventType() {
 		case serf.EventMemberJoin:
+			// untangle serf's coalease event
 			for _, member := range e.(serf.MemberEvent).Members {
 				if m.isLocal(member) {
 					continue

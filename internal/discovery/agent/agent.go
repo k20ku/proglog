@@ -18,9 +18,9 @@ import (
 	"github.com/k20ku/proglog/internal/server"
 )
 
+// agentはすべてのインスタンスの上で動作をする．
+// 異なるすべてのコンポーネントをセットアップして，接続する．
 type Agent struct {
-	// agentはすべてのインスタンスの上で動作をする．
-	// 異なるすべてのコンポーネントをセットアップして，接続する．
 	Config
 
 	// コンポーネントはlogやserverなどである
@@ -52,7 +52,7 @@ type Config struct {
 func (c Config) RPCAddr() (string, error) {
 	host, _, err := net.SplitHostPort(c.BindAddr)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to get host port from BindAddr(%s): %w", c.BindAddr, err)
 	}
 	return fmt.Sprintf("%s:%d", host, c.RPCPort), nil
 }
@@ -78,17 +78,19 @@ func New(config Config) (*Agent, error) {
 
 func (a *Agent) setupLogger() error {
 	// TODO: logger
-	logger := slog.Default().WithGroup("agent")
+	a.Logger = slog.Default().WithGroup("agent")
 	return nil
 }
 
 func (a *Agent) setupLog() error {
 	var err error
-	a.log, err = log.NewLog(
+	if a.log, err = log.NewLog(
 		a.Config.DataDir,
 		log.NewConfig(),
-	)
-	return fmt.Errorf("agent setup log to %s: %w", a.Config.DataDir, err)
+	); err != nil {
+		return fmt.Errorf("agent setup log to %s: %+v", a.Config.DataDir, err)
+	}
+	return nil
 }
 
 func (a *Agent) setupServer() error {
@@ -98,12 +100,13 @@ func (a *Agent) setupServer() error {
 		a.Config.ACLPolicyFile,
 	)
 	if err != nil {
-		return fmt.Errorf("")
+		return fmt.Errorf("agent new aclAuthrizer: %w", err)
 	}
 	aclAuth := server.NewACLAuthorizer(authorizer)
 	// TODO: wrapper
 	clog := server.NewWalCommitLog(a.log)
 	serverConfig := &server.Config{
+		Logger:     a.Logger.WithGroup("agent_server"),
 		CommitLog:  clog,
 		Authorizer: aclAuth,
 	}
@@ -114,7 +117,7 @@ func (a *Agent) setupServer() error {
 	}
 	a.server, err = server.NewGRPCServer(serverConfig, opts...)
 	if err != nil {
-		return err
+		return fmt.Errorf("agent new gRPC server: %w", err)
 	}
 	rpcAddr, err := a.RPCAddr()
 	if err != nil {
@@ -153,15 +156,18 @@ func (a *Agent) setupMembership() error {
 		DialOptions: opts,
 		LocalServer: client,
 	}
-	a.membership, err = discovery.New(a.replicator, discovery.Config{
+	a.membership, err = discovery.NewMembership(a.replicator, discovery.Config{
 		NodeName: a.Config.NodeName,
 		BindAddr: a.Config.BindAddr,
-		Tags: map[string]string{
-			"rpc_addr": rpcAddr,
+		Tags: map[discovery.Tag]string{
+			discovery.RPC_ADDR: rpcAddr,
 		},
 		StartJoinAddrs: a.Config.StartJoinAddrs,
 	})
-	return err
+	if err != nil {
+		return fmt.Errorf("agent new membership: %w", err)
+	}
+	return nil
 }
 
 func (a *Agent) Shutdown() error {
