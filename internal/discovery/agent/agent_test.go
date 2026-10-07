@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/consul/sdk/v2/freeport"
 	api "github.com/k20ku/proglog/gen/go/log/v1"
 	"github.com/k20ku/proglog/internal/config"
 	"github.com/k20ku/proglog/internal/discovery/agent"
 	"github.com/k20ku/proglog/internal/testdata"
 	"github.com/stretchr/testify/require"
-	"github.com/travisjeffery/go-dynaport"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -36,9 +36,10 @@ func TestAgent(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	var agents []*agent.Agent
-	for i := 0; i < 3; i++ {
-		ports := dynaport.Get(2)
+	agents := make([]*agent.Agent, 3)
+	for i := 0; i < len(agents); i++ {
+		nodeName := fmt.Sprintf("node%d", i)
+		ports := freeport.GetN(t, 2)
 		bindAddr := fmt.Sprintf("%s:%d", "127.0.0.1", ports[0])
 		rpcPort := ports[1]
 
@@ -53,19 +54,19 @@ func TestAgent(t *testing.T) {
 		}
 
 		agent, err := agent.New(agent.Config{
-			NodeName:        fmt.Sprintf("%d", i),
-			StartJoinAddrs:  startJoinAddrs,
+			NodeName:        nodeName,
 			BindAddr:        bindAddr,
 			RPCPort:         rpcPort,
 			DataDir:         dataDir,
+			StartJoinAddrs:  startJoinAddrs,
 			ACLModelFile:    testdata.ACLModelFile,
 			ACLPolicyFile:   testdata.ACLPolicyFile,
 			ServerTLSConfig: serverTLSConfig,
 			PeerTLSConfig:   peerTLSConfig,
 		})
-		require.NoError(t, err)
+		require.NoErrorf(t, err, "failed to new agent (%s)")
 
-		agents = append(agents, agent)
+		agents[i] = agent
 	}
 	defer func() {
 		for _, agent := range agents {

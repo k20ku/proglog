@@ -2,13 +2,18 @@ package replicate
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 
 	api "github.com/k20ku/proglog/gen/go/log/v1"
+	"github.com/k20ku/proglog/internal/discovery"
 )
+
+var _ discovery.Handler = (*Replicator)(nil)
 
 type Replicator struct {
 	DialOptions []grpc.DialOption
@@ -41,17 +46,21 @@ func (r *Replicator) Join(name, addr string) error {
 	}
 	r.serverLeaveChans[name] = make(chan struct{})
 
-	go r.replicate(addr, r.serverLeaveChans[name])
+	eg, ctx := errgroup.WithContext(context.Background())
+	eg.Go(func() error {
+		err := r.replicate(ctx, addr, r.serverLeaveChans[name])
+		return fmt.Errorf("replication(member_name=%s) failed: %w", name, err)
+	})
 
 	return nil
 }
 
-func (r *Replicator) replicate(addr string, leave chan struct{}) {
+func (r *Replicator) replicate(ctx context.Context, addr string, leave chan struct{}) error {
 	// build gRPC channel to remote server
 	conn, err := grpc.NewClient(addr, r.DialOptions...)
 	if err != nil {
 		r.logError(err, "failed to dial", addr)
-		return
+		return fmt.Errorf("failed to dial to %s", addr)
 	}
 	defer func() {
 		_ = conn.Close()
@@ -59,7 +68,6 @@ func (r *Replicator) replicate(addr string, leave chan struct{}) {
 
 	client := api.NewLogServiceClient(conn)
 
-	ctx := context.Background()
 	stream, err := client.ConsumeStream(ctx,
 		&api.ConsumeStreamRequest{
 			Offset: 0,
@@ -67,39 +75,44 @@ func (r *Replicator) replicate(addr string, leave chan struct{}) {
 	)
 	if err != nil {
 		r.logError(err, "failed to consume", addr)
-		return
+		return fmt.Errorf("consume stream from %s", addr)
 	}
 
 	records := make(chan *api.Record)
 	// producer produce records from another server.
 	// executed in another goroutine
-	go func() {
+	eg, ctx := errgroup.WithContext(ctx)
+	eg.Go(func() error {
 		for {
 			recv, err := stream.Recv()
 			if err != nil {
 				r.logError(err, "failed to receive", addr)
-				return
+				return fmt.Errorf("failed to receive from addr=%s: %w", addr, err)
 			}
 			records <- recv.Record
 		}
-	}()
+	})
 
 	// consumer
 	// wait for producer
 	for {
 		select {
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-r.close:
-			return
+			return nil
 		case <-leave:
-			return
+			r.Logger.Info("leave accepted")
+			return nil
 		case record := <-records:
-			if _, err = r.LocalServer.Produce(ctx,
+			if _, err = r.LocalServer.Produce(
+				ctx,
 				&api.ProduceRequest{
 					Record: record,
 				},
 			); err != nil {
 				r.logError(err, "failed to produce", addr)
-				return
+				return fmt.Errorf("send local produce off=%d: %w", record.Offset, err)
 			}
 		}
 	}

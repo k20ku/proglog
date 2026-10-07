@@ -32,9 +32,9 @@ type Agent struct {
 	replicator *replicate.Replicator
 	// END: conponents
 
-	shutdown     bool
-	shutdowns    chan struct{}
-	shutdownLock sync.Mutex
+	shutdown      bool
+	shutdownChans chan struct{}
+	shutdownLock  sync.Mutex
 }
 
 type Config struct {
@@ -52,15 +52,15 @@ type Config struct {
 func (c Config) RPCAddr() (string, error) {
 	host, _, err := net.SplitHostPort(c.BindAddr)
 	if err != nil {
-		return "", fmt.Errorf("failed to get host port from BindAddr(%s): %w", c.BindAddr, err)
+		return "", fmt.Errorf("host of BindAddr(%s): %w", c.BindAddr, err)
 	}
 	return fmt.Sprintf("%s:%d", host, c.RPCPort), nil
 }
 
 func New(config Config) (*Agent, error) {
 	a := &Agent{
-		Config:    config,
-		shutdowns: make(chan struct{}),
+		Config:        config,
+		shutdownChans: make(chan struct{}),
 	}
 	setup := []func() error{
 		a.setupLogger,
@@ -77,8 +77,7 @@ func New(config Config) (*Agent, error) {
 }
 
 func (a *Agent) setupLogger() error {
-	// TODO: logger
-	a.Logger = slog.Default().WithGroup("agent")
+	a.Logger = slog.Default().WithGroup(fmt.Sprintf("%s-agent", a.Config.NodeName))
 	return nil
 }
 
@@ -88,7 +87,7 @@ func (a *Agent) setupLog() error {
 		a.Config.DataDir,
 		log.NewConfig(),
 	); err != nil {
-		return fmt.Errorf("agent setup log to %s: %+v", a.Config.DataDir, err)
+		return fmt.Errorf("agent setup log to %s: %w", a.Config.DataDir, err)
 	}
 	return nil
 }
@@ -103,13 +102,14 @@ func (a *Agent) setupServer() error {
 		return fmt.Errorf("agent new aclAuthrizer: %w", err)
 	}
 	aclAuth := server.NewACLAuthorizer(authorizer)
-	// TODO: wrapper
 	clog := server.NewWalCommitLog(a.log)
 	serverConfig := &server.Config{
-		Logger:     a.Logger.WithGroup("agent_server"),
+		Logger:     a.Logger.WithGroup("server"),
 		CommitLog:  clog,
 		Authorizer: aclAuth,
 	}
+
+	// TLS
 	var opts []grpc.ServerOption
 	if a.Config.ServerTLSConfig != nil {
 		creds := credentials.NewTLS(a.Config.ServerTLSConfig)
@@ -155,6 +155,7 @@ func (a *Agent) setupMembership() error {
 	a.replicator = &replicate.Replicator{
 		DialOptions: opts,
 		LocalServer: client,
+		Logger:      a.Logger.WithGroup("replicator"),
 	}
 	a.membership, err = discovery.NewMembership(a.replicator, discovery.Config{
 		NodeName: a.Config.NodeName,
@@ -177,7 +178,7 @@ func (a *Agent) Shutdown() error {
 		return nil
 	}
 	a.shutdown = true
-	close(a.shutdowns)
+	close(a.shutdownChans)
 
 	shutdown := []func() error{
 		a.membership.Leave,
@@ -190,7 +191,7 @@ func (a *Agent) Shutdown() error {
 	}
 	for _, fn := range shutdown {
 		if err := fn(); err != nil {
-			return err
+			return fmt.Errorf("Node Name %s agent shutdown failed: %w", a.Config.NodeName, err)
 		}
 	}
 	return nil
