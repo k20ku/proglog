@@ -21,13 +21,13 @@ type Replicator struct {
 
 	Logger *slog.Logger
 
-	mu               sync.Mutex
-	serverLeaveChans map[string]chan struct{}
-	closed           bool
-	close            chan struct{}
+	mu             sync.Mutex
+	serverLeaveChs map[string]chan struct{}
+	closed         bool
+	close          chan struct{}
 }
 
-// Joins the member that has a name and addr
+// Join the member that has a name and addr
 // why does Join do replication? Only Jeffery knows...
 // Join starts replication to local log server in another goroutine and
 // returns nil whether or not replication succeed.
@@ -40,15 +40,15 @@ func (r *Replicator) Join(name, addr string) error {
 		return nil
 	}
 
-	if _, ok := r.serverLeaveChans[name]; ok {
+	if _, ok := r.serverLeaveChs[name]; ok {
 		// already replicating so skip
 		return nil
 	}
-	r.serverLeaveChans[name] = make(chan struct{})
+	r.serverLeaveChs[name] = make(chan struct{})
 
 	eg, ctx := errgroup.WithContext(context.Background())
 	eg.Go(func() error {
-		err := r.replicate(ctx, addr, r.serverLeaveChans[name])
+		err := r.replicate(ctx, addr, r.serverLeaveChs[name])
 		return fmt.Errorf("replication(member_name=%s) failed: %w", name, err)
 	})
 
@@ -122,11 +122,11 @@ func (r *Replicator) Leave(name string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.init()
-	if _, ok := r.serverLeaveChans[name]; !ok {
+	if _, ok := r.serverLeaveChs[name]; !ok {
 		return nil
 	}
-	close(r.serverLeaveChans[name])
-	delete(r.serverLeaveChans, name)
+	close(r.serverLeaveChs[name])
+	delete(r.serverLeaveChs, name)
 	return nil
 }
 
@@ -134,8 +134,8 @@ func (r *Replicator) init() {
 	if r.Logger == nil {
 		r.Logger = slog.Default().WithGroup("replicator")
 	}
-	if r.serverLeaveChans == nil {
-		r.serverLeaveChans = make(map[string]chan struct{})
+	if r.serverLeaveChs == nil {
+		r.serverLeaveChs = make(map[string]chan struct{})
 	}
 	if r.close == nil {
 		r.close = make(chan struct{})

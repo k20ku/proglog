@@ -21,7 +21,7 @@ func New(model, policy string) (*Authorizer, error) {
 	return &Authorizer{enforcer: enforcer}, nil
 }
 
-// Authorizes whether subject is permitted to run the action on the object.
+// Authorize whether subject is permitted to run the action on the object.
 // If not permitted, returns ErrPermissionDenied.
 func (a *Authorizer) Authorize(subject, action, object string) error {
 	ok, err := a.enforcer.Enforce(subject, object, action)

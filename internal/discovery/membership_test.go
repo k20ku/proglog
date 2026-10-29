@@ -2,6 +2,7 @@ package discovery_test
 
 import (
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -13,42 +14,45 @@ import (
 )
 
 func TestMembership(t *testing.T) {
-	memberships := make([]*Membership, 3)
+	n := 3
+	// n copy of membership that exists in different nodes
+	memberships := make([]*Membership, n)
 	leaveJoinHandler := &handler{
-		joins:  make(chan map[string]string, 3),
-		leaves: make(chan string, 3),
+		joins:  make(chan map[string]string, n),
+		leaves: make(chan string, n),
 	}
-	ports := freeport.GetN(t, 3)
-	addrs := make([]string, 3)
+	ports := freeport.GetN(t, n)
+	addrs := make([]string, n)
 	for i, port := range ports {
 		addrs[i] = fmt.Sprintf("%s:%d", "127.0.0.1", port)
 	}
-	leaderId := 0
-	for id := range 3 {
-		cfg := Config{
+	leaderID := 0
+	for id := range n {
+		mconf := Config{
 			NodeName: fmt.Sprintf("node%d", id),
 			BindAddr: addrs[id],
-			Tags: map[Tag]string{
-				RPC_ADDR: addrs[id],
+			Tags: map[MembershipTag]string{
+				M_RPC_ADDR: addrs[id],
 			},
 		}
-		if id != leaderId {
-			cfg.StartJoinAddrs = []string{
-				addrs[leaderId],
+		if id != leaderID {
+			mconf.StartJoinAddrs = []string{
+				addrs[leaderID],
 			}
 		}
-		m, err := NewMembership(leaveJoinHandler, cfg)
-		require.NoErrorf(t, err, "new membership at id(%d) failed", id)
+		m, err := NewMembership(mconf, leaveJoinHandler, slog.Default().WithGroup("membership"))
+		require.NoErrorf(t, err, "new membership at %s failed", m.NodeName)
+		require.NoErrorf(t, m.Start(), "start membership at %s failed", m.NodeName)
 		memberships[id] = m
 	}
 
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
 		require.Equal(c,
-			3, len(memberships[leaderId].Members()),
+			n, len(memberships[leaderID].Members()),
 			"incollect num of all members",
 		)
 		require.Equal(c,
-			3, len(leaveJoinHandler.joins),
+			n, len(leaveJoinHandler.joins),
 			"incollect num of joined members",
 		)
 		require.Equal(c,
@@ -58,25 +62,25 @@ func TestMembership(t *testing.T) {
 		)
 	}, 1500*time.Millisecond, 250*time.Millisecond)
 
-	leftId := 3 - 1
+	leftID := n - 1
 	require.NoErrorf(t,
-		memberships[leftId].Leave(),
+		memberships[leftID].Leave(),
 		"node%d failed to leave",
-		leftId,
+		leftID,
 	)
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
 		require.Equalf(c,
 			serf.StatusLeft.String(),
-			memberships[leaderId].Members()[leftId].Status.String(),
+			memberships[leaderID].Members()[leftID].Status.String(),
 			"node%d is not StatusLeft",
-			leftId,
+			leftID,
 		)
 		require.Equal(c,
-			3, len(memberships[leaderId].Members()),
+			n, len(memberships[leaderID].Members()),
 			"incollect num of all members",
 		)
 		require.Equal(c,
-			3, len(leaveJoinHandler.joins),
+			n, len(leaveJoinHandler.joins),
 			"incollect num of joined members",
 		)
 		require.Equal(c,
@@ -87,13 +91,13 @@ func TestMembership(t *testing.T) {
 	}, 3000*time.Millisecond, 250*time.Millisecond)
 
 	require.Equal(t,
-		fmt.Sprintf("node%d", leftId),
+		fmt.Sprintf("node%d", leftID),
 		<-leaveJoinHandler.leaves,
 		"left id is incollect",
 	)
 }
 
-var _ Handler = &handler{}
+var _ Handler = (*handler)(nil)
 
 type handler struct {
 	joins  chan map[string]string
