@@ -27,6 +27,10 @@ type Replicator struct {
 	close          chan struct{}
 }
 
+func NewReplicator() (*Replicator, error) {
+	return nil, nil
+}
+
 // Join the member that has a name and addr
 // why does Join do replication? Only Jeffery knows...
 // Join starts replication to local log server in another goroutine and
