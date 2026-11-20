@@ -14,7 +14,7 @@ import (
 	api "github.com/k20ku/proglog/gen/go/log/v1"
 	"github.com/k20ku/proglog/internal/auth"
 	"github.com/k20ku/proglog/internal/discovery"
-	"github.com/k20ku/proglog/internal/discovery/replicate"
+	"github.com/k20ku/proglog/internal/discovery/handlers"
 	"github.com/k20ku/proglog/internal/log"
 	"github.com/k20ku/proglog/internal/server"
 )
@@ -58,7 +58,7 @@ func (c AgentConfig) RPCAddr() (string, error) {
 	return fmt.Sprintf("%s:%d", host, c.RPCPort), nil
 }
 
-func NewAgent(aconf AgentConfig, logger *slog.Logger) (*Agent, error) {
+func New(aconf AgentConfig, logger *slog.Logger) (*Agent, error) {
 	if logger == nil {
 		logger = slog.Default().WithGroup(fmt.Sprintf("agent-%s", aconf.NodeName))
 	}
@@ -129,7 +129,7 @@ func newMembership(aconf AgentConfig, logger *slog.Logger) (*discovery.Membershi
 		return nil, err
 	}
 	client := api.NewLogServiceClient(conn)
-	replicator = &replicate.Replicator{
+	replicator = &handlers.Replicator{
 		DialOptions: opts,
 		LocalServer: client,
 		Logger:      logger.WithGroup("replicator"),

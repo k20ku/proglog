@@ -4,13 +4,14 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/consul/sdk/v2/freeport"
 	api "github.com/k20ku/proglog/gen/go/log/v1"
+	"github.com/k20ku/proglog/internal/agent"
 	"github.com/k20ku/proglog/internal/config"
-	"github.com/k20ku/proglog/internal/discovery/agent"
 	"github.com/k20ku/proglog/internal/testdata"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -49,11 +50,11 @@ func TestAgent(t *testing.T) {
 		if i != 0 {
 			startJoinAddrs = append(
 				startJoinAddrs,
-				agents[0].Config.BindAddr,
+				agents[0].BindAddr,
 			)
 		}
 
-		agent, err := agent.New(agent.Config{
+		agent, err := agent.New(agent.AgentConfig{
 			NodeName:        nodeName,
 			BindAddr:        bindAddr,
 			RPCPort:         rpcPort,
@@ -63,7 +64,7 @@ func TestAgent(t *testing.T) {
 			ACLPolicyFile:   testdata.ACLPolicyFile,
 			ServerTLSConfig: serverTLSConfig,
 			PeerTLSConfig:   peerTLSConfig,
-		})
+		}, slog.New(slog.DiscardHandler))
 		require.NoErrorf(t, err, "failed to new agent (%s)")
 
 		agents[i] = agent
@@ -116,7 +117,7 @@ func client(
 ) api.LogServiceClient {
 	tlsCreds := credentials.NewTLS(tlsConfig)
 	opts := []grpc.DialOption{grpc.WithTransportCredentials(tlsCreds)}
-	rpcAddr, err := agent.Config.RPCAddr()
+	rpcAddr, err := agent.AgentConfig.RPCAddr()
 	require.NoError(t, err)
 	conn, err := grpc.NewClient(fmt.Sprintf(
 		"%s",

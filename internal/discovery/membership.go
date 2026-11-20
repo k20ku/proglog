@@ -121,11 +121,6 @@ func (m *Membership) Shutdown() error {
 	return nil
 }
 
-type Handler interface {
-	Join(name, addr string) error
-	Leave(name string) error
-}
-
 func (m *Membership) eventloop() {
 	// event loop
 	for e := range m.events {
