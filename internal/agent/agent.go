@@ -24,18 +24,19 @@ import (
 type Agent struct {
 	AgentConfig
 
-	// コンポーネントはlogやserverなどである
+	Logger *slog.Logger
+
 	// START: components
-	Logger     *slog.Logger
 	log        *log.Log
 	server     *grpc.Server
+	conn       *grpc.ClientConn
 	membership *discovery.Membership
-	handler    discovery.Handler
+	handler    AgentHandler
 	// END: conponents
 
-	shutdown      bool
-	shutdownChans chan struct{}
-	shutdownLock  sync.Mutex
+	mu          sync.Mutex // locks state, shutdownErr and Start/Shutdown Bodies
+	state       AgentState
+	shutdownErr error
 }
 
 type AgentConfig struct {
@@ -55,7 +56,7 @@ func (c AgentConfig) RPCAddr() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("host of BindAddr(%s): %w", c.BindAddr, err)
 	}
-	return fmt.Sprintf("%s:%d", host, c.RPCPort), nil
+	return net.JoinHostPort(host, fmt.Sprint(c.RPCPort)), nil
 }
 
 func New(aconf AgentConfig, logger *slog.Logger) (*Agent, error) {
@@ -66,26 +67,24 @@ func New(aconf AgentConfig, logger *slog.Logger) (*Agent, error) {
 	if err != nil {
 		return nil, fmt.Errorf("new %s agent: %w", aconf.DataDir, err)
 	}
-	serv, err := newLogServiceServer(aconf, logger, alog)
+	srv, err := newGRPCServer(aconf, logger, alog)
 	if err != nil {
-		errClose := alog.Close()
-		return nil, fmt.Errorf("new %s agent init server: %w", errors.Join(err, errClose))
+		// Do not leak the Log we just opened
+		return nil, errors.Join(
+			fmt.Errorf("agent %s: new server: %w", aconf.NodeName, err),
+			alog.Close(),
+		)
 	}
 	a := &Agent{
-		AgentConfig:   aconf,
-		Logger:        logger,
-		shutdownChans: make(chan struct{}),
-		log:           alog,
-		server:        serv,
+		AgentConfig: aconf,
+		Logger:      logger,
+		log:         alog,
+		server:      srv,
 	}
 	return a, nil
 }
 
-func (a *Agent) Start() error {
-	return nil
-}
-
-func newLogServiceServer(aconf AgentConfig, logger *slog.Logger, alog *log.Log) (*grpc.Server, error) {
+func newGRPCServer(aconf AgentConfig, logger *slog.Logger, alog *log.Log) (*grpc.Server, error) {
 	authorizer, err := auth.New(
 		aconf.ACLModelFile,
 		aconf.ACLPolicyFile,
@@ -113,11 +112,12 @@ func newLogServiceServer(aconf AgentConfig, logger *slog.Logger, alog *log.Log) 
 	return srv, nil
 }
 
-func newMembership(aconf AgentConfig, logger *slog.Logger) (*discovery.Membership, error) {
+func newReplicator(aconf AgentConfig, logger *slog.Logger) (*handlers.Replicator, *grpc.ClientConn, error) {
 	rpcAddr, err := aconf.RPCAddr()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+
 	var opts []grpc.DialOption
 	if aconf.PeerTLSConfig != nil {
 		opts = append(opts, grpc.WithTransportCredentials(
@@ -126,93 +126,51 @@ func newMembership(aconf AgentConfig, logger *slog.Logger) (*discovery.Membershi
 	}
 	conn, err := grpc.NewClient(rpcAddr, opts...)
 	if err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("new local client for %s: %w", rpcAddr, err)
 	}
-	client := api.NewLogServiceClient(conn)
-	replicator = &handlers.Replicator{
-		DialOptions: opts,
-		LocalServer: client,
+
+	return &handlers.Replicator{
+		DialOptions: opts, // peers are dialed with the same credentials
+		LocalServer: api.NewLogServiceClient(conn),
 		Logger:      logger.WithGroup("replicator"),
-	}
-	membership, err = discovery.NewMembership(discovery.Config{
-		NodeName: a.NodeName,
-		BindAddr: a.BindAddr,
-		Tags: map[discovery.MembershipTag]string{
-			discovery.M_RPC_ADDR: rpcAddr,
-		},
-		StartJoinAddrs: a.StartJoinAddrs,
-	}, a.replicator, a.Logger)
-	if err != nil {
-		return fmt.Errorf("agent new membership: %w", err)
-	}
-	return nil
+	}, conn, nil
 }
 
-/*
-*
-
-	func (a *Agent) setupServer() error {
-		rpcAddr, err := aconf.RPCAddr()
-		if err != nil {
-			return err
-		}
-
-		ln, err := net.Listen("tcp", rpcAddr)
-		if err != nil {
-			return err
-		}
-		go func() {
-			if err := a.server.Serve(ln); err != nil {
-				_ = a.Shutdown()
-			}
-		}()
-		return err
-	}
-*/
-func (a *Agent) setupMembership() error {
-	rpcAddr, err := a.RPCAddr()
+func newMembership(
+	aconf AgentConfig,
+	handler discovery.Handler,
+	logger *slog.Logger,
+) (*discovery.Membership, error) {
+	rpcAddr, err := aconf.RPCAddr()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	var opts []grpc.DialOption
-	if a.PeerTLSConfig != nil {
-		opts = append(opts, grpc.WithTransportCredentials(
-			credentials.NewTLS(a.PeerTLSConfig),
-		),
-		)
-	}
-	conn, err := grpc.NewClient(rpcAddr, opts...)
-	if err != nil {
-		return err
-	}
-	client := api.NewLogServiceClient(conn)
-	a.handler = &replicate.Replicator{
-		DialOptions: opts,
-		LocalServer: client,
-		Logger:      a.Logger.WithGroup("replicator"),
-	}
-	a.membership, err = discovery.NewMembership(discovery.Config{
-		NodeName: a.NodeName,
-		BindAddr: a.BindAddr,
+
+	m, err := discovery.NewMembership(discovery.Config{
+		NodeName: aconf.NodeName,
+		BindAddr: aconf.BindAddr,
 		Tags: map[discovery.MembershipTag]string{
 			discovery.M_RPC_ADDR: rpcAddr,
 		},
-		StartJoinAddrs: a.StartJoinAddrs,
-	}, a.handler, a.Logger)
+		StartJoinAddrs: aconf.StartJoinAddrs,
+	}, handler, logger)
 	if err != nil {
-		return fmt.Errorf("agent new membership: %w", err)
+		return nil, fmt.Errorf("new membership: %w", err)
 	}
+	return m, nil
+}
+
+func (a *Agent) Start() error {
 	return nil
 }
 
 func (a *Agent) Shutdown() error {
-	a.shutdownLock.Lock()
-	defer a.shutdownLock.Unlock()
-	if a.shutdown {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.state == StateStopped {
 		return nil
 	}
-	a.shutdown = true
-	close(a.shutdownChans)
+	a.state = StateStopped
 
 	var errs []error
 	if a.membership != nil {
@@ -220,8 +178,7 @@ func (a *Agent) Shutdown() error {
 			errs = append(errs, err)
 		}
 	}
-	if a.replicator != nil {
-
+	if a.handler != nil {
 	}
 	shutdown := []func() error{
 		a.membership.Leave,
