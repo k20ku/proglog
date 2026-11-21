@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	api "github.com/k20ku/proglog/gen/go/log/v1"
+	api "github.com/k20ku/epilog/gen/go/log/v1"
 	"github.com/stretchr/testify/require"
 )
 

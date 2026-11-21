@@ -3,9 +3,9 @@ package testutil
 import (
 	"testing"
 
-	api "github.com/k20ku/proglog/gen/go/log/v1"
-	"github.com/k20ku/proglog/config"
-	"github.com/k20ku/proglog/internal/testdata"
+	api "github.com/k20ku/epilog/gen/go/log/v1"
+	"github.com/k20ku/epilog/config"
+	"github.com/k20ku/epilog/internal/testdata"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"

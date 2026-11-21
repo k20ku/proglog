@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 GOBIN := $(PWD)/tools/bin
-CERT_DIR = $(HOME)/.proglog/cert
+CERT_DIR = $(HOME)/.epilog/cert
+SPIFFE_HOST := epilog
 
 .PHONY: gen
 gen: buf ## Generate proto files
@@ -25,7 +26,7 @@ $(CERT_DIR):
 	@mkdir -p $(CERT_DIR)
 
 .PHONY: gencert
-gencert: $(CERT_DIR) gencert-root-ca gencert-ca gencert-server gencert-client ## Generate certificate at CERT_DIR. Default CERT_DIR is ${HOME}/.proglog/cert
+gencert: $(CERT_DIR) gencert-root-ca gencert-ca gencert-server gencert-client ## Generate certificate at CERT_DIR. Default CERT_DIR is ${HOME}/.epilog/cert
 	@echo CERT_DIR=$(CERT_DIR)
 
 .PHONY: gencert-root-ca
@@ -58,7 +59,7 @@ gencert-server:
 		--not-after=8760h \
 		--san localhost \
 		--san 127.0.0.1 \
-		--san spiffe://proglog/workload/server \
+		--san spiffe://$(SPIFFE_HOST)/workload/server \
 		--ca $(CERT_DIR)/ca.pem \
 		--ca-key $(CERT_DIR)/ca.key \
 		--no-password --insecure \
@@ -72,7 +73,7 @@ gencert-client:
 		$(CERT_DIR)/nobody-client.crt \
 		$(CERT_DIR)/nobody-client.key \
 		--not-after=8760h \
-		--san spiffe://proglog/workload/nobody \
+		--san spiffe://$(SPIFFE_HOST)/workload/nobody \
 		--ca $(CERT_DIR)/ca.pem \
 		--ca-key $(CERT_DIR)/ca.key \
 		--no-password --insecure \
@@ -84,23 +85,7 @@ gencert-client:
 		$(CERT_DIR)/admin-client.crt \
 		$(CERT_DIR)/admin-client.key \
 		--not-after=8760h \
-		--san spiffe://proglog/workload/admin \
-		--ca $(CERT_DIR)/ca.pem \
-		--ca-key $(CERT_DIR)/ca.key \
-		--no-password --insecure \
-		--bundle -f \
-
-.PHONY: gencert-otel-collector
-gencert-otel-collector:
-	step certificate create \
-		--profile leaf \
-		"OpenTelemetory Collector" \
-		$(CERT_DIR)/otel-collector.crt \
-		$(CERT_DIR)/otel-collector.key \
-		--not-after=8760h \
-		--san localhost \
-		--san 127.0.0.1 \
-		--san spiffe://proglog/workload/otel-collector \
+		--san spiffe://$(SPIFFE_HOST)/workload/admin \
 		--ca $(CERT_DIR)/ca.pem \
 		--ca-key $(CERT_DIR)/ca.key \
 		--no-password --insecure \

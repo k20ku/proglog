@@ -8,7 +8,7 @@ import (
 
 	"github.com/hashicorp/consul/sdk/v2/freeport"
 	"github.com/hashicorp/serf/serf"
-	. "github.com/k20ku/proglog/discovery"
+	. "github.com/k20ku/epilog/discovery"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

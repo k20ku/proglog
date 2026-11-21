@@ -456,7 +456,7 @@ const file_log_v1_log_proto_rawDesc = "" +
 	"\aProduce\x12\x16.log.v1.ProduceRequest\x1a\x17.log.v1.ProduceResponse\"\x00\x12<\n" +
 	"\aConsume\x12\x16.log.v1.ConsumeRequest\x1a\x17.log.v1.ConsumeResponse\"\x00\x12R\n" +
 	"\rProduceStream\x12\x1c.log.v1.ProduceStreamRequest\x1a\x1d.log.v1.ProduceStreamResponse\"\x00(\x010\x01\x12P\n" +
-	"\rConsumeStream\x12\x1c.log.v1.ConsumeStreamRequest\x1a\x1d.log.v1.ConsumeStreamResponse\"\x000\x01B-Z+github.com/k20ku/proglog/proto/log/v1;logv1b\x06proto3"
+	"\rConsumeStream\x12\x1c.log.v1.ConsumeStreamRequest\x1a\x1d.log.v1.ConsumeStreamResponse\"\x000\x01B,Z*github.com/k20ku/epilog/proto/log/v1;logv1b\x06proto3"
 
 var (
 	file_log_v1_log_proto_rawDescOnce sync.Once

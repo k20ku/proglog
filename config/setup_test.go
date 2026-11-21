@@ -8,7 +8,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/k20ku/proglog/internal/testdata"
+	"github.com/k20ku/epilog/internal/testdata"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,7 +36,7 @@ func TestSetup(t *testing.T) {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}
-		expectedURI := "spiffe://proglog/workload/nobody"
+		expectedURI := "spiffe://epilog/workload/nobody"
 		actualURI := leaf.URIs[0].String()
 		if actualURI != expectedURI {
 			msg := fmt.Sprintf(

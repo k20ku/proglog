@@ -1,4 +1,4 @@
-# Proglog
+# Epilog
 
 **Distributed Log Service implemetation**:
 

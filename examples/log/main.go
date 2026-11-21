@@ -8,8 +8,8 @@ import (
 	"os"
 	"path"
 
-	api "github.com/k20ku/proglog/gen/go/log/v1"
-	logvx "github.com/k20ku/proglog/log"
+	api "github.com/k20ku/epilog/gen/go/log/v1"
+	logvx "github.com/k20ku/epilog/log"
 )
 
 func run(dir string, n int, offset uint64) error {

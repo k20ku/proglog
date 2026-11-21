@@ -11,7 +11,7 @@ import (
 
 	grpcauth "github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/auth"
 	logging "github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/logging"
-	api "github.com/k20ku/proglog/gen/go/log/v1"
+	api "github.com/k20ku/epilog/gen/go/log/v1"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

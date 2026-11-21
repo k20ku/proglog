@@ -1,4 +1,4 @@
-module github.com/k20ku/proglog
+module github.com/k20ku/epilog
 
 go 1.26.1
 

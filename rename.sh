@@ -1,9 +1,8 @@
 #!/usr/bin/bash
 
-MOD=github.com/k20ku/proglog
+OLD_MOD=github.com/k20ku/proglog
+NEW_MOD=github.com/k20ku/epilog
 
-# GNU sed (Linux). On macOS use: sed -i '' -E ...
-for pkg in log auth discovery server agent config; do
-  grep -rl --include='*.go' "$MOD/internal/$pkg" . \
-    | xargs sed -i -E "s#\"$MOD/internal/$pkg(/[^\"]*)?\"#\"$MOD/$pkg\1\"#g"
-done
+go mod edit -module "$NEW_MOD"
+
+grep -rl --include='*.go' "$OLD_MOD" . | xargs sed -i "s#$OLD_MOD#$NEW_MOD#g"

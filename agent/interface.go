@@ -3,7 +3,7 @@ package agent
 import (
 	"io"
 
-	"github.com/k20ku/proglog/discovery"
+	"github.com/k20ku/epilog/discovery"
 )
 
 type AgentHandler interface {

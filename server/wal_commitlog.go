@@ -3,8 +3,8 @@ package server
 import (
 	"errors"
 
-	api "github.com/k20ku/proglog/gen/go/log/v1"
-	"github.com/k20ku/proglog/log"
+	api "github.com/k20ku/epilog/gen/go/log/v1"
+	"github.com/k20ku/epilog/log"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

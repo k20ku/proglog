@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/k20ku/proglog/internal/testdata"
+	"github.com/k20ku/epilog/internal/testdata"
 	"github.com/stretchr/testify/require"
 )
 
