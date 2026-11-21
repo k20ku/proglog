@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	api "github.com/k20ku/proglog/gen/go/log/v1"
-	"github.com/k20ku/proglog/internal/config"
+	"github.com/k20ku/proglog/config"
 	"github.com/k20ku/proglog/internal/testdata"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"

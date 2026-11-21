@@ -3,8 +3,8 @@ package testutil
 import (
 	"testing"
 
-	"github.com/k20ku/proglog/internal/log"
-	"github.com/k20ku/proglog/internal/server"
+	"github.com/k20ku/proglog/log"
+	"github.com/k20ku/proglog/server"
 	"github.com/stretchr/testify/require"
 )
 

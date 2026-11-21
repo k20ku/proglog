@@ -3,7 +3,7 @@ package server
 import (
 	"errors"
 
-	"github.com/k20ku/proglog/internal/auth"
+	"github.com/k20ku/proglog/auth"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

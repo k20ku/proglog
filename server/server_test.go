@@ -13,9 +13,9 @@ import (
 	"google.golang.org/grpc/status"
 
 	api "github.com/k20ku/proglog/gen/go/log/v1"
-	"github.com/k20ku/proglog/internal/auth"
-	"github.com/k20ku/proglog/internal/config"
-	"github.com/k20ku/proglog/internal/log"
+	"github.com/k20ku/proglog/auth"
+	"github.com/k20ku/proglog/config"
+	"github.com/k20ku/proglog/log"
 	"github.com/k20ku/proglog/internal/testdata"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"

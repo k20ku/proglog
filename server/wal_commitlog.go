@@ -4,7 +4,7 @@ import (
 	"errors"
 
 	api "github.com/k20ku/proglog/gen/go/log/v1"
-	"github.com/k20ku/proglog/internal/log"
+	"github.com/k20ku/proglog/log"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

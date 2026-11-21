@@ -9,7 +9,7 @@ import (
 	"path"
 
 	api "github.com/k20ku/proglog/gen/go/log/v1"
-	logvx "github.com/k20ku/proglog/internal/log"
+	logvx "github.com/k20ku/proglog/log"
 )
 
 func run(dir string, n int, offset uint64) error {
